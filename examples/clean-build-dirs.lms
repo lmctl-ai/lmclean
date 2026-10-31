@@ -1,0 +1,14 @@
+# lmclean rule pack: dependency and build directories.
+# Selects directories named node_modules or target; a matched directory is
+# removed recursively in exec mode and its descendants are never re-filtered.
+program = _lmcode_ schema="../clean.dsl.json";
+@select
+fn build_dir(f: File) -> bool implements Filter {
+  return f.is_dir() && (f.name() == "node_modules" || f.name() == "target");
+}
+@report
+fn audit(f: File) -> void implements Report {
+  print("lmclean matched directory " + f.path());
+}
+end _lmcode_
+savedsl(program, ARGV[0]);

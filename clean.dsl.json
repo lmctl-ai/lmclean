@@ -1,0 +1,29 @@
+{
+  "dsl.schema": 2,
+  "name": "lmclean_v1",
+  "types": {
+    "File": {
+      "methods": {
+        "path": [{ "params": [], "returns": "string" }],
+        "name": [{ "params": [], "returns": "string" }],
+        "extension": [{ "params": [], "returns": "string" }],
+        "size": [{ "params": [], "returns": "int" }],
+        "rsize": [{ "params": [], "returns": "int" }],
+        "depth": [{ "params": [], "returns": "int" }],
+        "is_file": [{ "params": [], "returns": "bool" }],
+        "is_dir": [{ "params": [], "returns": "bool" }],
+        "is_symlink": [{ "params": [], "returns": "bool" }],
+        "modified": [{ "params": [], "returns": "int" }]
+      }
+    }
+  },
+  "functions": {
+    "print": [{ "params": ["string"], "returns": "void" }],
+    "now": [{ "params": [], "returns": "int" }]
+  },
+  "interfaces": {
+    "Filter": { "params": [{ "name": "f", "type": "File" }], "returns": "bool" },
+    "Report": { "params": [{ "name": "f", "type": "File" }], "returns": "void" },
+    "Ignore": { "params": [{ "name": "f", "type": "File" }], "returns": "bool" }
+  }
+}

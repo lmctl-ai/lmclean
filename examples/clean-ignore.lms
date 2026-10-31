@@ -1,0 +1,19 @@
+# lmclean rule pack: stale temp files, with VCS internals pruned by rule.
+# lmclean has no .gitignore support and no built-in ignore rules: pruning is
+# the program's job via @ignore entries, evaluated before @select.
+program = _lmcode_ schema="../clean.dsl.json";
+@ignore
+fn skip_vcs(f: File) -> bool implements Ignore {
+  return f.is_dir() && (f.name() == ".git" || f.name() == ".svn" || f.name() == ".hg");
+}
+@select
+fn stale_tmp(f: File) -> bool implements Filter {
+  let stale = now() - f.modified() > 7 * 24 * 3600;
+  return f.is_file() && stale && f.extension() == "tmp";
+}
+@report
+fn audit(f: File) -> void implements Report {
+  print("lmclean matched " + f.path());
+}
+end _lmcode_
+savedsl(program, ARGV[0]);

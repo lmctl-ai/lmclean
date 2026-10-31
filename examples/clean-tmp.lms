@@ -1,0 +1,15 @@
+# lmclean rule pack: stale temp and log files.
+# Selects *.tmp / *.log files untouched for more than 7 days.
+program = _lmcode_ schema="../clean.dsl.json";
+@select
+fn stale_junk(f: File) -> bool implements Filter {
+  let ext = f.extension();
+  let stale = now() - f.modified() > 7 * 24 * 3600;
+  return f.is_file() && stale && (ext == "tmp" || ext == "log");
+}
+@report
+fn audit(f: File) -> void implements Report {
+  print("lmclean matched " + f.path() + " (" + str(f.size()) + " bytes)");
+}
+end _lmcode_
+savedsl(program, ARGV[0]);

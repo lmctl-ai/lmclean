@@ -1,0 +1,18 @@
+# lmclean rule pack: stale generated directories.
+# Selects build output dirs (target/dist/build/out) whose own mtime is more
+# than 24 hours old. A matched directory is removed recursively in exec mode
+# and its descendants are never re-filtered.
+program = _lmcode_ schema="../clean.dsl.json";
+@select
+fn stale_build_dir(f: File) -> bool implements Filter {
+  return f.is_dir()
+    && (f.name() == "target" || f.name() == "dist" || f.name() == "build" || f.name() == "out")
+    && now() - f.modified() > 24 * 3600;
+}
+@report
+fn audit(f: File) -> void implements Report {
+  print("lmclean matched stale directory " + f.path()
+    + " (" + str(f.rsize() / 1048576) + " MiB reclaimable)");
+}
+end _lmcode_
+savedsl(program, ARGV[0]);

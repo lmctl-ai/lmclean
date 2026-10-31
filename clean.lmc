@@ -1,0 +1,3 @@
+#teamfile: /home/ubuntu/lmclean/clean.lmc
+
+_AGENT_ alias=Lead provider=kimi model=kimi-code/k3 sessionid=session_353e9970-a6ca-4a38-b683-67f4776ad494 sessiondir=/home/ubuntu/lmclean

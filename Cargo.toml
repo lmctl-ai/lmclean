@@ -1,0 +1,8 @@
+[package]
+name = "lmclean"
+version = "0.1.0"
+edition = "2021"
+description = "Scriptable file search & cleanup host for lmcode bytecode v6"
+
+[dependencies]
+dslvm = { path = "../lmcode-rust/dslvm" }
