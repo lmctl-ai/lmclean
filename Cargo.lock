@@ -5,6 +5,7 @@ version = 4
 [[package]]
 name = "dslvm"
 version = "6.0.0"
+source = "git+https://github.com/lmctl-ai/lmcode-rust?rev=f6b50c41905e925c8f662ec62e224226de8c1591#f6b50c41905e925c8f662ec62e224226de8c1591"
 
 [[package]]
 name = "lmclean"

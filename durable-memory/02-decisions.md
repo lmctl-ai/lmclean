@@ -38,7 +38,7 @@
   `{"stored":"...","original":"..."}` (byte-exact escaping). Moves use
   `rename` with a copy+remove fallback on EXDEV. Restore replays the manifest
   in reverse order, recreating parent dirs.
-- **Restore mode** keeps one code path: `--dsl FILE` is still required and the
+- **Restore mode** keeps one code path: `--lmcode FILE` is still required and the
   program is loaded (so a bad file still exits 3), but the body is not run and
   nothing is walked.
 - **Output protocol**: stdout carries only JSON lines (byte-exact escaping like

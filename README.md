@@ -27,9 +27,9 @@ candidate file, and lets the boolean result decide what gets deleted.
 
 ```
 lmclean --version
-lmclean --dsl-schema [--json]      # exact schema bytes (hash-bound to bytecode)
-lmclean --dsl-signatures           # canonical registry signatures
-lmclean --dsl FILE.dslb [OPTIONS] [PATH ...]     # PATH default: "."
+lmclean --lmcode-schema [--json]      # exact schema bytes (hash-bound to bytecode)
+lmclean --lmcode-signatures           # canonical registry signatures
+lmclean --lmcode FILE.dslb [OPTIONS] [PATH ...]     # PATH default: "."
   --exec          actually delete (default: dry-run)
   --trash DIR     move matches into DIR + manifest.jsonl; requires --exec
   --restore       with --trash DIR: move manifest entries back, then exit
@@ -113,7 +113,7 @@ Compile with the mono lmscript build (see durable-memory/03-build-run-test.md):
 
 ```
 /home/ubuntu/lmctl-mono/lmscript/bin/lmscript examples/clean-tmp.lms clean-tmp.dslb
-lmclean --dsl clean-tmp.dslb --exec /var/tmp/myapp
+lmclean --lmcode clean-tmp.dslb --exec /var/tmp/myapp
 ```
 
 `File` methods: `path()`, `name()`, `extension()` (no dot, empty if none),

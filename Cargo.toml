@@ -5,4 +5,4 @@ edition = "2021"
 description = "Scriptable file search & cleanup host for lmcode bytecode v6"
 
 [dependencies]
-dslvm = { path = "../lmcode-rust/dslvm" }
+dslvm = { git = "https://github.com/lmctl-ai/lmcode-rust", rev = "f6b50c41905e925c8f662ec62e224226de8c1591" }

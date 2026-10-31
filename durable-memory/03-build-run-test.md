@@ -20,7 +20,7 @@ cargo is not on PATH: `source ~/.cargo/env` first (or call
   in per-match `"size"` and summary `"bytes"` (4+6+7=17 for the tmp fixture,
   7 for the node_modules fixture, 0 for an empty matched dir), stale-build-dir
   24h age rule, stdout-is-JSON purity, R42 flags (including
-  `method File.rsize() -> int` in `--dsl-signatures`).
+  `method File.rsize() -> int` in `--lmcode-signatures`).
 
 ## Compiling rules
 
@@ -34,5 +34,5 @@ The mono compiler works and is the default in test.sh:
 ARGV[0].) The released `lmscript` 0.2.444 on PATH was not needed; override with
 `LMSCRIPT_BIN=... bash test.sh` if the mono build is unavailable.
 
-`lmclean --dsl-schema | cmp - clean.dsl.json` must hold: the embedded schema
+`lmclean --lmcode-schema | cmp - clean.dsl.json` must hold: the embedded schema
 is byte-identical to the file programs are compiled against.
