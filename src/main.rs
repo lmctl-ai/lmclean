@@ -219,7 +219,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let mut host = host::Host::new()?;
     if args.len() == 1 && args[0] == "--version" {
-        println!("lmclean {}", env!("CARGO_PKG_VERSION"));
+        println!("lmclean {}", env!("LMCLEAN_BUILD_VERSION"));
         return Ok(0);
     }
     if (args.len() == 1 || (args.len() == 2 && args[1] == "--json")) && args[0] == "--lmcode-schema" {

@@ -43,6 +43,16 @@
   nothing is walked.
 - **Output protocol**: stdout carries only JSON lines (byte-exact escaping like
   the sample host); `print()` and all diagnostics go to stderr.
+- **CI releases** (`.github/workflows/release.yml`, mirroring
+  lmcode-rust-sample): five-platform build matrix, `LMCLEAN_VERSION` =
+  `0.1.<run_number>` baked in by `build.rs`, publish job on main creates
+  `v<VERSION>` with binaries + LICENSE + SHA256SUMS. No THIRD_PARTY_NOTICES.md:
+  lmclean has no third-party code — its only dependency is the first-party
+  dslvm, pinned by git rev in Cargo.toml (see 03), not tracking moving main.
+- **Examples are compiler-hostage**: rule-entry `.lms` sources need `savedsl`
+  to export `.dslb`; both the released lmscript and the current mono build
+  removed it, so CI runs the gate with `LMCLEAN_SKIP_EXAMPLES=1` (cargo tests +
+  build + R42 flags only) until an export path returns.
 - **Self-contained recursive size**: `rsize` is computed natively with std::fs
   (`walk::rsize`), never by shelling out to `du`/`df` — the host must stay
   zero-dependency and portable, and sizes must be gate-deterministic. Exact

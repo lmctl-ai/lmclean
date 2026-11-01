@@ -6,13 +6,30 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # shellcheck source=/dev/null
-source ~/.cargo/env
+[ -f ~/.cargo/env ] && source ~/.cargo/env
 
 BIN=target/release/lmclean
 LMSCRIPT_BIN="${LMSCRIPT_BIN:-/home/ubuntu/lmctl-mono/lmscript/bin/lmscript}"
+# Set LMCLEAN_SKIP_EXAMPLES=1 to bypass every lmscript-dependent section
+# (example compilation and the dslb-driven end-to-end runs). Used in CI,
+# where the released lmscript cannot export .dslb bytecode (savedsl was
+# removed from the public compiler); cargo tests, the release build and the
+# --version/--lmcode-schema/--lmcode-signatures checks still run.
+LMCLEAN_SKIP_EXAMPLES="${LMCLEAN_SKIP_EXAMPLES:-}"
+
+# python3 is not on PATH as "python3" everywhere (Windows Git Bash).
+PYTHON=python3
+command -v python3 >/dev/null 2>&1 || PYTHON=python
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 note() { echo "== $*"; }
+
+# touch_age DAYS PATH — set mtime DAYS days in the past. GNU touch first
+# (Linux, Git Bash on Windows), BSD date -v fallback (macOS).
+touch_age() {
+  if touch -d "$1 days ago" "$2" 2>/dev/null; then return 0; fi
+  touch -t "$(date -v-"$1"d +%Y%m%d%H%M.%S)" "$2"
+}
 
 note "cargo test --locked"
 cargo test --locked --quiet
@@ -20,7 +37,9 @@ cargo test --locked --quiet
 note "cargo build --release --locked"
 cargo build --release --locked --quiet
 [ -x "$BIN" ] || fail "release binary missing"
-python3 tests/check-host-flags.py clean.dsl.json "$BIN" || fail "hard host flag cutover"
+"$PYTHON" tests/check-host-flags.py clean.dsl.json "$BIN" || fail "hard host flag cutover"
+
+if [ -z "$LMCLEAN_SKIP_EXAMPLES" ]; then
 
 note "compile examples with $LMSCRIPT_BIN"
 "$LMSCRIPT_BIN" examples/clean-tmp.lms target/clean-tmp.dslb
@@ -34,7 +53,7 @@ note "compile examples with $LMSCRIPT_BIN"
 
 assert_json_lines() {
   # Every stdout line must parse as JSON.
-  python3 -c '
+  "$PYTHON" -c '
 import json, sys
 for line in sys.stdin:
     line = line.strip()
@@ -47,12 +66,12 @@ build_tree() {
   local tree="$1"
   mkdir -p "$tree/sub" "$tree/.hid" "$tree/app/node_modules/pkg" "$tree/app/src"
   echo keep    > "$tree/keep.txt"
-  echo old     > "$tree/old.tmp";   touch -d "10 days ago" "$tree/old.tmp"
-  echo stale   > "$tree/stale.log"; touch -d "30 days ago" "$tree/stale.log"
+  echo old     > "$tree/old.tmp";   touch_age 10 "$tree/old.tmp"
+  echo stale   > "$tree/stale.log"; touch_age 30 "$tree/stale.log"
   echo new     > "$tree/new.tmp"
-  echo nested  > "$tree/sub/nested.tmp"; touch -d "10 days ago" "$tree/sub/nested.tmp"
-  echo hidden  > "$tree/.hid/h.tmp";     touch -d "10 days ago" "$tree/.hid/h.tmp"
-  echo dotfile > "$tree/.dotfile.tmp";   touch -d "10 days ago" "$tree/.dotfile.tmp"
+  echo nested  > "$tree/sub/nested.tmp"; touch_age 10 "$tree/sub/nested.tmp"
+  echo hidden  > "$tree/.hid/h.tmp";     touch_age 10 "$tree/.hid/h.tmp"
+  echo dotfile > "$tree/.dotfile.tmp";   touch_age 10 "$tree/.dotfile.tmp"
   echo module  > "$tree/app/node_modules/pkg/index.js"
   echo code    > "$tree/app/src/main.rs"
 }
@@ -172,8 +191,8 @@ printf '%s\n' "$OUT" | grep -q 'sub/nested.tmp' && fail "--max-depth 0 should no
 note "@ignore pruning"
 TREE="$WORK/tree8"
 mkdir -p "$TREE/.git/hooks"
-echo vcs > "$TREE/.git/hooks/x.tmp"; touch -d "10 days ago" "$TREE/.git/hooks/x.tmp"
-echo top > "$TREE/old.tmp";         touch -d "10 days ago" "$TREE/old.tmp"
+echo vcs > "$TREE/.git/hooks/x.tmp"; touch_age 10 "$TREE/.git/hooks/x.tmp"
+echo top > "$TREE/old.tmp";         touch_age 10 "$TREE/old.tmp"
 # With the ignore program (.git pruned by rule, hidden dirs included via --hidden):
 OUT="$($BIN --lmcode target/clean-ignore.dslb --hidden "$TREE")" || fail "ignore dry-run exit != 0"
 printf '%s\n' "$OUT" | assert_json_lines
@@ -213,7 +232,7 @@ grep -q 'lmclean matched' "$WORK/out8" && fail "print() leaked into stdout"
 note "stale build dirs (24h)"
 TREE="$WORK/tree10"
 mkdir -p "$TREE/oldproj/target" "$TREE/fresh/dist" "$TREE/src/build"
-touch -d "2 days ago" "$TREE/oldproj/target"
+touch_age 2 "$TREE/oldproj/target"
 OUT="$($BIN --lmcode target/clean-stale-build-dirs.dslb "$TREE")" || fail "stale-dirs dry-run exit != 0"
 printf '%s\n' "$OUT" | assert_json_lines
 printf '%s\n' "$OUT" | grep -q '"path":"'"$TREE"'/oldproj/target"' || fail "2-day-old target not matched"
@@ -222,14 +241,21 @@ printf '%s\n' "$OUT" | grep -q '"path":"'"$TREE"'/oldproj/target","size":0' || f
 printf '%s\n' "$OUT" | grep -q 'fresh/dist' && fail "fresh dist must not match the 24h rule"
 printf '%s\n' "$OUT" | grep -q 'src/build' && fail "fresh build must not match the 24h rule"
 
+else
+note "LMCLEAN_SKIP_EXAMPLES=1: skipping example compilation and dslb end-to-end sections"
+fi
+
 # --- 11. schema and signatures flags ---------------------------------------------
 note "R42 flags"
-"$BIN" --version | grep -q '^lmclean 0\.1\.0$' || fail "--version output"
+[ "$("$BIN" --version)" = "lmclean ${LMCLEAN_VERSION:-0.1.0}" ] || fail "--version output"
 "$BIN" --lmcode-schema | cmp - clean.dsl.json || fail "--lmcode-schema must print exact schema bytes"
 "$BIN" --lmcode-schema --json | cmp - clean.dsl.json || fail "--lmcode-schema --json must print exact schema bytes"
-"$BIN" --lmcode-signatures | grep -q '^method File.modified() -> int$' || fail "--lmcode-signatures missing File.modified"
-"$BIN" --lmcode-signatures | grep -q '^method File.rsize() -> int$' || fail "--lmcode-signatures missing File.rsize"
-"$BIN" --lmcode-signatures | grep -q '^fn now() -> int$' || fail "--lmcode-signatures missing now"
+# Capture before grepping: piping the binary into grep -q can close stdout
+# early (SIGPIPE) and trip pipefail.
+SIGS="$("$BIN" --lmcode-signatures)" || fail "--lmcode-signatures exit != 0"
+printf '%s\n' "$SIGS" | grep -q '^method File.modified() -> int$' || fail "--lmcode-signatures missing File.modified"
+printf '%s\n' "$SIGS" | grep -q '^method File.rsize() -> int$' || fail "--lmcode-signatures missing File.rsize"
+printf '%s\n' "$SIGS" | grep -q '^fn now() -> int$' || fail "--lmcode-signatures missing now"
 
 echo
 echo "PASS: all lmclean gate checks passed"
