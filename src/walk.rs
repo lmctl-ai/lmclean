@@ -181,7 +181,7 @@ mod tests {
                     .strip_prefix(root)
                     .unwrap()
                     .to_string_lossy()
-                    .into_owned(),
+                    .replace('\\', "/"),
                 cand.depth,
             ));
             Ok(true)

@@ -304,6 +304,8 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    // Windows forbids '"' in filenames, so the escape fixture is unix-only.
+    #[cfg(unix)]
     #[test]
     fn manifest_line_parsing_handles_escapes() {
         let dir = scratch("escapes");
