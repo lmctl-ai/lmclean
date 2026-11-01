@@ -250,6 +250,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
     #[test]
     fn symlinks_reported_not_followed() {
         let dir = scratch("symlink");
@@ -316,6 +317,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
     #[test]
     fn rsize_counts_symlink_own_len_not_target() {
         let dir = scratch("rsize-link");
