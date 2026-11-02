@@ -1,15 +1,26 @@
 # lmclean rule pack: stale temp and log files.
-# Selects *.tmp / *.log files untouched for more than 7 days.
+# Tunable (--param NAME=VALUE, or "params" in the server settings):
+#   stale_days  files untouched for more than this many days (default 7)
+#   exts        comma-separated extensions to select (default "tmp,log")
 program = _lmcode_ schema="../clean.dsl.json";
 @select
 fn stale_junk(f: File) -> bool implements Filter {
-  let ext = f.extension();
-  let stale = now() - f.modified() > 7 * 24 * 3600;
-  return f.is_file() && stale && (ext == "tmp" || ext == "log");
+  let exts = "," + param_str("exts", "tmp,log") + ",";
+  let stale = now() - f.modified() > param_int("stale_days", 7) * 24 * 3600;
+  return f.is_file() && stale && str_contains(exts, "," + f.extension() + ",");
 }
 @report
 fn audit(f: File) -> void implements Report {
   print("lmclean matched " + f.path() + " (" + str(f.size()) + " bytes)");
 }
 end _lmcode_
-savedsl(program, ARGV[0]);
+
+# Driver: lmscript compiles the rules above, then run_lmcode launches this
+# host (ARGV[0]) with the program as --lmcode and forwards the remaining
+# arguments (PATHs, --exec, --param NAME=VALUE, --serve, ...).
+#   lmscript examples/NAME.lms target/release/lmclean [HOST OPTIONS] [PATH ...]
+host_args = [ARGV[0], "--lmcode", "$DSLFILE"];
+for (i in range(1, len(ARGV))) { host_args = concat(host_args, [ARGV[i]]); }
+r = run_lmcode(program, {command: host_args});
+assert(r.ok, "lmclean failed: " + json_stringify(r));
+print(json_stringify(r.result));

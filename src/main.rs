@@ -1,13 +1,15 @@
 //! lmscript compiles the cleanup rules. This executable only loads verified
 //! bytecode v6 and runs it against the files it walks. Dry-run is the default;
 //! `--exec` deletes, `--trash DIR` moves matches into DIR with a manifest.
+mod frame;
 mod host;
 mod json;
 mod server;
 mod trash;
+mod view;
 mod walk;
 
-use dslvm::{error_json, report_app_failure, report_error, Error, ObjRef, Program, Value};
+use dslvm::{Error, ObjRef, Program, Value};
 use host::write_json_string;
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -15,12 +17,12 @@ use std::path::{Path, PathBuf};
 
 // Include exact bytes, including whitespace: the schema hash binds every program.
 const SCHEMA: &[u8] = include_bytes!("../clean.dsl.json");
-const USAGE: &str = "usage: --version | --serve [...] (see --serve usage) | --lmcode-schema [--json] | --lmcode-signatures | --lmcode FILE [--exec] [--trash DIR] [--restore] [--hidden] [--max-depth N] [PATH ...]";
+const USAGE: &str = "usage: --version | --serve [...] (see --serve usage) | --lmcode-schema [--json] | --lmcode-signatures | --lmcode FILE [--exec] [--trash DIR] [--restore] [--hidden] [--max-depth N] [--param NAME=VALUE ...] [PATH ...]";
 
 fn main() {
     std::process::exit(match run() {
         Ok(code) => code,
-        Err(_) => report_app_failure("cannot read program input"),
+        Err(_) => frame::app_failure("cannot read program input"),
     });
 }
 
@@ -31,6 +33,7 @@ struct Cli {
     restore: bool,
     hidden: bool,
     max_depth: Option<u32>,
+    params: Vec<(String, String)>,
     paths: Vec<OsString>,
 }
 
@@ -42,6 +45,7 @@ fn parse_cli(args: &[OsString]) -> Result<Cli, String> {
         restore: false,
         hidden: false,
         max_depth: None,
+        params: Vec::new(),
         paths: Vec::new(),
     };
     let mut i = 2;
@@ -57,6 +61,15 @@ fn parse_cli(args: &[OsString]) -> Result<Cli, String> {
                     .get(i)
                     .ok_or_else(|| "--trash needs a DIR".to_string())?;
                 cli.trash = Some(dir.clone());
+            }
+            Some("--param") => {
+                i += 1;
+                let pair = args
+                    .get(i)
+                    .and_then(|v| v.to_str())
+                    .and_then(|v| v.split_once('='))
+                    .ok_or_else(|| "--param needs NAME=VALUE".to_string())?;
+                cli.params.push((pair.0.to_string(), pair.1.to_string()));
             }
             Some("--max-depth") => {
                 i += 1;
@@ -234,32 +247,24 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         }
         return Ok(0);
     }
-    if args.first().is_some_and(|a| a == "--serve") {
-        return Ok(match server::parse_args(&args[1..]) {
+    if args.iter().any(|a| a == "--serve") {
+        return Ok(match server::parse_args(&args) {
             Ok(cfg) => server::run(cfg),
-            Err(message) => {
-                println!(
-                    "{}",
-                    error_json("cli", &Error::new("CLI_USAGE", format!("{message}; {}", server::SERVE_USAGE)))
-                );
-                2
-            }
+            Err(message) => frame::usage(format!("{message}; {}", server::SERVE_USAGE)),
         });
     }
     if args.len() < 2 || args[0] != "--lmcode" {
-        println!("{}", error_json("cli", &Error::new("CLI_USAGE", USAGE)));
-        return Ok(2);
+        return Ok(frame::usage(USAGE));
     }
     let cli = match parse_cli(&args) {
         Ok(cli) => cli,
         Err(message) => {
-            println!(
-                "{}",
-                error_json("cli", &Error::new("CLI_USAGE", format!("{message}; {USAGE}")))
-            );
-            return Ok(2);
+            return Ok(frame::usage(format!("{message}; {USAGE}")));
         }
     };
+    for (name, value) in &cli.params {
+        host.params.borrow_mut().insert(name.clone(), value.clone());
+    }
     let bytes = std::fs::read(&cli.dsl)?;
     let program = match Program::load(&bytes, SCHEMA, &host.registry) {
         Ok(program) => program,
@@ -270,7 +275,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                 "LOAD_UNBOUND" => "lmclean import mismatch",
                 _ => "invalid lmclean bytecode",
             };
-            return Ok(report_error("load", &Error::new(&error.code, message)));
+            return Ok(frame::error("load", &Error::new(&error.code, message)));
         }
     };
     let mut out = io::stdout().lock();
@@ -280,14 +285,14 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         let dir = cli.trash.as_deref().map(PathBuf::from).unwrap_or_default();
         return match trash::restore(&dir, &mut out) {
             Ok(restored) => {
-                writeln!(out, "{{\"ok\":true,\"restored\":{restored}}}")?;
-                Ok(0)
+                out.flush()?;
+                Ok(frame::ok(&format!("{{\"restored\":{restored}}}")))
             }
-            Err(e) => Ok(report_app_failure(&format!("restore: {e}"))),
+            Err(e) => Ok(frame::app_failure(&format!("restore: {e}"))),
         };
     }
     if let Err(error) = program.run(&mut host.context, &host.registry) {
-        return Ok(report_error("run", &error));
+        return Ok(frame::error("run", &error));
     }
 
     let mut sweep = Sweep {
@@ -304,21 +309,21 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         match entry.annotation.as_str() {
             "select" if unary_file && entry.returns == "bool" => sweep.selects.push(index),
             "select" => {
-                return Ok(report_app_failure(&format!(
+                return Ok(frame::app_failure(&format!(
                     "entry '{}' annotated @select must implement Filter(File) -> bool",
                     entry.name
                 )));
             }
             "report" if unary_file && entry.returns == "void" => sweep.reports.push(index),
             "report" => {
-                return Ok(report_app_failure(&format!(
+                return Ok(frame::app_failure(&format!(
                     "entry '{}' annotated @report must implement Report(File) -> void",
                     entry.name
                 )));
             }
             "ignore" if unary_file && entry.returns == "bool" => sweep.ignores.push(index),
             "ignore" => {
-                return Ok(report_app_failure(&format!(
+                return Ok(frame::app_failure(&format!(
                     "entry '{}' annotated @ignore must implement Ignore(File) -> bool",
                     entry.name
                 )));
@@ -329,7 +334,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     if let (true, Some(dir)) = (&cli.exec, &cli.trash) {
         sweep.trash = match trash::Trash::open(Path::new(dir)) {
             Ok(trash) => Some(trash),
-            Err(e) => return Ok(report_app_failure(&format!("trash: {e}"))),
+            Err(e) => return Ok(frame::app_failure(&format!("trash: {e}"))),
         };
     }
     let roots: Vec<OsString> = if cli.paths.is_empty() {
@@ -350,19 +355,20 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             outcome
         });
         if let Err(error) = result {
-            return Ok(report_error("run", &error));
+            return Ok(frame::error("run", &error));
         }
     }
     if sweep.failed > 0 {
-        return Ok(report_app_failure(&format!(
+        return Ok(frame::app_failure(&format!(
             "lmclean: {} deletion(s) failed ({} matched)",
             sweep.failed, sweep.matched
         )));
     }
-    writeln!(
-        out,
-        "{{\"ok\":true,\"matched\":{},\"bytes\":{},\"dry_run\":{}}}",
+    // The terminal return frame ({"ok": true, "result": ...}) that run_lmcode
+    // and every other lmcode host consumer expects as the last stdout line.
+    out.flush()?;
+    Ok(frame::ok(&format!(
+        "{{\"matched\":{},\"bytes\":{},\"dry_run\":{}}}",
         sweep.matched, sweep.bytes, !cli.exec
-    )?;
-    Ok(0)
+    )))
 }

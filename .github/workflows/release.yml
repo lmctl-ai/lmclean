@@ -11,6 +11,8 @@ concurrency:
   cancel-in-progress: false
 env:
   LMCLEAN_VERSION: 0.1.${{ github.run_number }}
+  # Published @lmctl-ai/lmctl (lmscript compiler) used to build the examples.
+  LMCTL_VERSION: 0.2.450
 jobs:
   build:
     strategy:
@@ -37,31 +39,40 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-      # LMCLEAN_SKIP_EXAMPLES=1: the released lmscript compiler removed
-      # `savedsl` (public .dslb export), so the rule-entry examples cannot be
-      # compiled in CI. The skip keeps cargo tests, the release build, the
-      # host-flag cutover check and the
-      # --version/--lmcode-schema/--lmcode-signatures checks; the full
-      # end-to-end gate (dry-run/exec/trash/restore) runs locally where a
-      # savedsl-capable compiler and prebuilt bytecode exist.
-      - name: Build and test
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      # Rule packs are lmscript drivers (`lmscript examples/NAME.lms HOST`):
+      # the compiler builds each program and launches the host via run_lmcode.
+      - name: Install compiler from npm
         run: |
-          LMCLEAN_SKIP_EXAMPLES=1 bash test.sh
-          [[ "$(target/release/lmclean --version | tr -d '\r')" == "lmclean $LMCLEAN_VERSION" ]]
-          mkdir -p dist
-          cp 'target/release/lmclean${{ matrix.ext }}' 'dist/lmclean-${{ matrix.label }}${{ matrix.ext }}'
-      # REST server integration tests. The protocol tests need no bytecode.
-      # The per-example tests drive every examples/*.lms rule pack through the
-      # server using the prebuilt bytecode committed in tests/fixtures (CI
-      # cannot compile .lms: the released lmscript dropped `savedsl`).
-      # LMCLEAN_REQUIRE_EXAMPLES=1 turns a missing fixture into a failure
-      # instead of a silent skip, so this step cannot go green without
-      # actually running the examples.
+          npm install --prefix "$RUNNER_TEMP/lmctl" "@lmctl-ai/lmctl@$LMCTL_VERSION"
+          echo "$RUNNER_TEMP/lmctl/node_modules/.bin" >> "$GITHUB_PATH"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            echo "LMSCRIPT_BIN=$RUNNER_TEMP/lmctl/node_modules/.bin/lmscript.cmd" >> "$GITHUB_ENV"
+          else
+            echo "LMSCRIPT_BIN=$RUNNER_TEMP/lmctl/node_modules/.bin/lmscript" >> "$GITHUB_ENV"
+          fi
+          echo "Using @lmctl-ai/lmctl@$LMCTL_VERSION"
+      # REST server integration tests: protocol tests plus every example rule
+      # pack (clean-tmp, clean-build-dirs, clean-ignore, clean-stale-build-dirs
+      # and the multi-program serve-all) driven through the REST API.
+      # LMCLEAN_REQUIRE_EXAMPLES=1 turns a missing compiler into a failure
+      # instead of a silent skip.
       - name: Server integration tests (all examples)
         env:
           LMCLEAN_REQUIRE_EXAMPLES: '1'
-          LMCLEAN_EXAMPLES_DIR: tests/fixtures
         run: cargo test --locked --test server -- --test-threads=1
+      # The full gate: unit tests, release build, every example end to end
+      # (dry-run/exec/trash/restore/params/ignore), exit-code protocol, R42 flags.
+      - name: Build and test
+        env:
+          LMCLEAN_REQUIRE_EXAMPLES: '1'
+        run: |
+          bash test.sh
+          [[ "$(target/release/lmclean --version | tr -d '\r')" == "lmclean $LMCLEAN_VERSION" ]]
+          mkdir -p dist
+          cp 'target/release/lmclean${{ matrix.ext }}' 'dist/lmclean-${{ matrix.label }}${{ matrix.ext }}'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: binary-${{ matrix.label }}
@@ -95,5 +106,5 @@ jobs:
             [[ "$(cat existing-target.txt)" == "$GITHUB_SHA" ]]
             echo "Release $tag already published for this commit."
           else
-            gh release create "$tag" dist/* --target "$GITHUB_SHA" --latest --title "$tag" --notes 'Automatically built and tested on Linux x64/arm64, macOS x64/arm64 and Windows x64: the lmclean gate (cargo unit tests, release build, host-flag cutover check, --version/--lmcode-schema/--lmcode-signatures checks) passed on every platform. The dry-run/exec/trash/restore end-to-end sections of the gate require an lmscript compiler with .dslb export (savedsl), which the released compiler no longer provides; they run locally via test.sh and are skipped in CI (LMCLEAN_SKIP_EXAMPLES=1).'
+            gh release create "$tag" dist/* --target "$GITHUB_SHA" --latest --title "$tag" --notes 'Automatically built and tested on Linux x64/arm64, macOS x64/arm64 and Windows x64: the full lmclean gate (cargo unit tests, REST server integration tests over every example, release build, host-flag cutover check, example rule packs end to end through lmscript, --version/--lmcode-schema/--lmcode-signatures checks) passed on every platform.'
           fi

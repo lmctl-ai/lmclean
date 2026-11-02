@@ -1,14 +1,25 @@
 # lmclean rule pack: dependency and build directories.
-# Selects directories named node_modules or target; a matched directory is
-# removed recursively in exec mode and its descendants are never re-filtered.
+# A matched directory is removed recursively in exec mode and its descendants
+# are never re-filtered.
+# Tunable: names  comma-separated directory names (default "node_modules,target")
 program = _lmcode_ schema="../clean.dsl.json";
 @select
 fn build_dir(f: File) -> bool implements Filter {
-  return f.is_dir() && (f.name() == "node_modules" || f.name() == "target");
+  let names = "," + param_str("names", "node_modules,target") + ",";
+  return f.is_dir() && str_contains(names, "," + f.name() + ",");
 }
 @report
 fn audit(f: File) -> void implements Report {
   print("lmclean matched directory " + f.path());
 }
 end _lmcode_
-savedsl(program, ARGV[0]);
+
+# Driver: lmscript compiles the rules above, then run_lmcode launches this
+# host (ARGV[0]) with the program as --lmcode and forwards the remaining
+# arguments (PATHs, --exec, --param NAME=VALUE, --serve, ...).
+#   lmscript examples/NAME.lms target/release/lmclean [HOST OPTIONS] [PATH ...]
+host_args = [ARGV[0], "--lmcode", "$DSLFILE"];
+for (i in range(1, len(ARGV))) { host_args = concat(host_args, [ARGV[i]]); }
+r = run_lmcode(program, {command: host_args});
+assert(r.ok, "lmclean failed: " + json_stringify(r));
+print(json_stringify(r.result));

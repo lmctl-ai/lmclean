@@ -22,25 +22,24 @@ cargo is not on PATH: `source ~/.cargo/env` first (or call
   24h age rule, stdout-is-JSON purity, R42 flags (including
   `method File.rsize() -> int` in `--lmcode-signatures`).
 
-## Compiling rules
+## Compiling and running rules
 
-The mono compiler works and is the default in test.sh:
+There is no standalone `.dslb` export any more (`savedsl` was removed from the
+compiler). Each `examples/*.lms` is a *driver*: after the `_lmcode_` block it
+calls `run_lmcode(program, {command: [ARGV[0], "--lmcode", "$DSLFILE", ...]})`,
+so `lmscript --no-preflight examples/NAME.lms HOST [HOST ARGS]` compiles and
+runs in one step. Install the compiler with `npm install @lmctl-ai/lmctl`
+(0.2.450 is what CI and these notes were verified with; set `LMSCRIPT_BIN`).
 
-```
-/home/ubuntu/lmctl-mono/lmscript/bin/lmscript examples/clean-tmp.lms target/clean-tmp.dslb
-```
-
-(`savedsl(program, ARGV[0])` in the .lms source takes the output path from
-ARGV[0].) The released `lmscript` 0.2.444 on PATH was not needed; override with
-`LMSCRIPT_BIN=... bash test.sh` if the mono build is unavailable.
-
-**BROKEN since the mono rebuild of 2026-10-31 (commit 4cb7bdb3, "Make lmcode
-execution explicit and keep private files owned until drainage")**: `savedsl`
-was removed from both the mono compiler and the released lmscript (verified
-0.2.451; bytecode export is now private to `run_lmcode`). `bash test.sh` fails
-at the example-compilation step until the examples are rewritten or an export
-path returns. Prebuilt `target/*.dslb` from 2026-10-30 remain valid; running
-`LMSCRIPT_BIN=/bin/true bash test.sh` reuses them and the full gate passes.
+Frame protocol the consumer enforces: the host's last stdout output is
+`LMCODE_RETURN_BEGIN\n<compact JSON>\nLMCODE_RETURN_END\n`; earlier stdout is
+passthrough. Success is `{"ok":true,"result":V}` (builder: `..."result":[..],"parts":N`
+in that order); failure is compact `{"ok":false,"phase":..,"code":..,"message":..}`.
+dslvm's own `report_ok`/`error_json` emit spaces after colons and no sentinels,
+which the consumer rejects, so `src/frame.rs` writes frames itself. Builders
+(`lmcode_build([host...])` + `b.add(p, ["--lmcode","$DSLFILE"])`) invoke the host
+once with repeated `--lmcode FILE` pairs. `run_lmcode` relays host stdout only
+when the host exits, hence `--serve --port-file`.
 
 `lmclean --lmcode-schema | cmp - clean.dsl.json` must hold: the embedded schema
 is byte-identical to the file programs are compiled against.
@@ -48,27 +47,18 @@ is byte-identical to the file programs are compiled against.
 ## CI (`.github/workflows/release.yml`)
 
 Five-platform matrix (ubuntu-24.04, ubuntu-24.04-arm, macos-15,
-macos-15-intel, windows-2022) mirroring lmcode-rust-sample, then a publish job
-(main only) creating release `v0.1.<run_number>` with the five binaries,
-LICENSE and SHA256SUMS. No THIRD_PARTY_NOTICES.md: lmclean has no third-party
-code (only dslvm, which is first-party lmctl-ai).
+macos-15-intel, windows-2022), then a publish job (main only) creating release
+`v0.1.<run_number>` with the five binaries, LICENSE and SHA256SUMS. Each build
+job installs `@lmctl-ai/lmctl@$LMCTL_VERSION` (pinned in the workflow env),
+runs `cargo test --test server` (REST integration tests over every example,
+`LMCLEAN_REQUIRE_EXAMPLES=1`), then the full `bash test.sh` gate. Only the
+Linux x64 run has been exercised by hand; macOS/Windows/arm are unverified.
 
 - **dslvm pin**: `Cargo.toml` pins the runtime by git rev
-  (`dslvm = { git = "https://github.com/lmctl-ai/lmcode-rust", rev =
-  "f6b50c41905e925c8f662ec62e224226de8c1591" }`), so CI needs no side-by-side
-  checkout — `cargo build --locked` fetches the exact pinned dslvm. Note that
-  lmcode-rust main HEAD (`94d62fa1bddcba71d787bab15ff4954822b208e3` as of
-  2026-11-01) removed `report_app_failure` and does not compile lmclean; a
-  rev bump must come with the host API fix.
-- **LMCLEAN_SKIP_EXAMPLES=1** is set in CI: with `savedsl` gone from the
-  released compiler, the dslb-driven end-to-end sections cannot run there. CI
-  keeps cargo tests, the release build, `tests/check-host-flags.py` and the
-  `--version/--lmcode-schema/--lmcode-signatures` checks on all five platforms.
-  No Node/lmctl install is needed in CI for the same reason.
-- **Version stamping**: `build.rs` bakes `LMCLEAN_VERSION` (set to
-  `0.1.${{ github.run_number }}` in the workflow) into `--version`, falling
-  back to `CARGO_PKG_VERSION` locally; test.sh asserts
-  `lmclean ${LMCLEAN_VERSION:-0.1.0}`.
+  (`f6b50c41905e925c8f662ec62e224226de8c1591`); lmcode-rust main later removed
+  `report_app_failure`, so a rev bump must come with the host API fix.
+- **Version stamping**: `build.rs` bakes `LMCLEAN_VERSION` into `--version`.
 - **Portable mtimes**: `touch_age DAYS PATH` in test.sh uses GNU `touch -d`
-  first (Linux, Git Bash on Windows) and falls back to BSD `date -v` +
-  `touch -t` (macOS), so the full gate can run on macOS too.
+  first, BSD `date -v` + `touch -t` on macOS.
+- Unit test `walk::tests::rsize_skips_unreadable_subtrees` needs a non-root
+  user (root ignores `chmod 000`); skip it when running as root.

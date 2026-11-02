@@ -19,7 +19,9 @@
   },
   "functions": {
     "print": [{ "params": ["string"], "returns": "void" }],
-    "now": [{ "params": [], "returns": "int" }]
+    "now": [{ "params": [], "returns": "int" }],
+    "param_int": [{ "params": ["string", "int"], "returns": "int" }],
+    "param_str": [{ "params": ["string", "string"], "returns": "string" }]
   },
   "interfaces": {
     "Filter": { "params": [{ "name": "f", "type": "File" }], "returns": "bool" },

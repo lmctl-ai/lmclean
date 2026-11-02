@@ -1,7 +1,15 @@
 //! The File host type and the rule-facing functions (print, now).
 //! Context owns every File handle; each handle lives for one walked candidate.
 use dslvm::{Context, Error, ObjRef, Registry, Value};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::io::Write;
+use std::rc::Rc;
+
+/// Client-tunable rule parameters, read by rules through `param_int` /
+/// `param_str`. Shared with the registry closures; the server swaps the
+/// contents before each scan, the CLI fills it from `--param NAME=VALUE`.
+pub type Params = Rc<RefCell<BTreeMap<String, String>>>;
 
 /// One walked filesystem candidate. Strings are raw bytes: Unix paths are not UTF-8.
 pub struct File {
@@ -19,6 +27,7 @@ pub struct File {
 pub struct Host {
     pub registry: Registry,
     pub context: Context,
+    pub params: Params,
 }
 
 fn file_ref(ctx: &Context, obj: ObjRef) -> Result<&File, Error> {
@@ -31,15 +40,17 @@ impl Host {
         // Default std registers strings, math, containers, JSON and files: the
         // implicit lmcode std catalog that compiled rules may import.
         let mut registry = Registry::new();
-        register(&mut registry)?;
+        let params = Params::default();
+        register(&mut registry, params.clone())?;
         Ok(Self {
             registry,
             context: Context::new(),
+            params,
         })
     }
 }
 
-fn register(r: &mut Registry) -> Result<(), Error> {
+fn register(r: &mut Registry, params: Params) -> Result<(), Error> {
     r.method("File", "path", &[], "string", |ctx, this, _| {
         Ok(Value::string(file_ref(ctx, this)?.path.as_slice()))
     })?;
@@ -81,6 +92,25 @@ fn register(r: &mut Registry) -> Result<(), Error> {
         err.write_all(b"\n")
             .map_err(|e| Error::host(format!("print: {e}")))?;
         Ok(Value::None)
+    })?;
+    let p = params.clone();
+    r.function("param_int", &["string", "int"], "int", move |_, a| {
+        let name = a[0].to_string_lossy()?;
+        match p.borrow().get(&name) {
+            None => Ok(a[1].clone()),
+            Some(v) => v
+                .trim()
+                .parse::<i64>()
+                .map(Value::Int)
+                .map_err(|_| Error::host(format!("param {name}: {v:?} is not an integer"))),
+        }
+    })?;
+    r.function("param_str", &["string", "string"], "string", move |_, a| {
+        let name = a[0].to_string_lossy()?;
+        match params.borrow().get(&name) {
+            None => Ok(a[1].clone()),
+            Some(v) => Ok(Value::string(v.as_bytes())),
+        }
     })?;
     r.function("now", &[], "int", |_, _| {
         let secs = std::time::SystemTime::now()

@@ -15,18 +15,23 @@
 //! contract holds over the wire too.
 use crate::host::{self, write_json_string};
 use crate::json::{self, Json};
+use crate::view::{self, Filter, Match, Page};
 use crate::{trash, walk};
-use dslvm::{error_json, report_app_failure, report_error, Error, Program, Value};
+use crate::frame;
+use dslvm::{Error, Program, Value};
+use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub const SERVE_USAGE: &str = "usage: --serve [--listen ADDR:PORT] [--presets FILE] [--preset NAME] [--idle-timeout SECS] [--allow-exec] [--token TOKEN]";
+pub const SERVE_USAGE: &str = "usage: --serve [--lmcode FILE ...] [--listen ADDR:PORT] [--presets FILE] [--preset NAME] [--port-file FILE] [--idle-timeout SECS] [--allow-exec] [--token TOKEN]";
 const MAX_BODY: usize = 1 << 20;
 const MAX_HEAD: usize = 16 << 10;
 
 pub struct Config {
+    port_file: Option<PathBuf>,
+    programs: Vec<PathBuf>,
     listen: String,
     presets: Option<PathBuf>,
     preset: Option<String>,
@@ -37,6 +42,8 @@ pub struct Config {
 
 pub fn parse_args(args: &[std::ffi::OsString]) -> Result<Config, String> {
     let mut cfg = Config {
+        port_file: None,
+        programs: Vec::new(),
         listen: "127.0.0.1:0".into(),
         presets: None,
         preset: None,
@@ -54,9 +61,12 @@ pub fn parse_args(args: &[std::ffi::OsString]) -> Result<Config, String> {
     };
     while i < args.len() {
         match args[i].to_str() {
+            Some("--serve") => {}
+            Some("--lmcode") => cfg.programs.push(PathBuf::from(value(&mut i, "--lmcode")?)),
             Some("--listen") => cfg.listen = value(&mut i, "--listen")?,
             Some("--presets") => cfg.presets = Some(PathBuf::from(value(&mut i, "--presets")?)),
             Some("--preset") => cfg.preset = Some(value(&mut i, "--preset")?),
+            Some("--port-file") => cfg.port_file = Some(PathBuf::from(value(&mut i, "--port-file")?)),
             Some("--token") => cfg.token = Some(value(&mut i, "--token")?),
             Some("--allow-exec") => cfg.allow_exec = true,
             Some("--idle-timeout") => {
@@ -76,13 +86,22 @@ pub fn parse_args(args: &[std::ffi::OsString]) -> Result<Config, String> {
     Ok(cfg)
 }
 
+/// Where a rule program comes from: a numbered `--lmcode` slot (what
+/// `run_lmcode` supplies) or a bytecode file on disk.
+#[derive(Clone, PartialEq)]
+enum ProgramRef {
+    Slot(usize),
+    File(PathBuf),
+}
+
 #[derive(Clone, Default)]
 struct Settings {
-    program: Option<PathBuf>,
+    program: Option<ProgramRef>,
     paths: Vec<PathBuf>,
     hidden: bool,
     max_depth: Option<u32>,
     trash: Option<PathBuf>,
+    params: BTreeMap<String, String>,
 }
 
 struct Presets {
@@ -110,7 +129,13 @@ fn apply_fields(s: &mut Settings, obj: &Json, base: Option<&Path>, skip: &[&str]
     for (key, v) in items {
         match key.as_str() {
             k if skip.contains(&k) => {}
-            "program" => s.program = Some(resolve(str_field(key, v)?)),
+            "program" => {
+                s.program = Some(match v {
+                    Json::Num(n) if *n >= 0.0 && n.fract() == 0.0 && *n < 1e6 => ProgramRef::Slot(*n as usize),
+                    Json::Str(_) => ProgramRef::File(resolve(str_field(key, v)?)),
+                    _ => return Err("\"program\" must be a slot number or a bytecode file path".into()),
+                })
+            }
             "paths" => {
                 let Json::Arr(list) = v else {
                     return Err("\"paths\" must be an array of strings".into());
@@ -135,6 +160,29 @@ fn apply_fields(s: &mut Settings, obj: &Json, base: Option<&Path>, skip: &[&str]
                 Json::Null => s.trash = None,
                 _ => s.trash = Some(resolve(str_field(key, v)?)),
             },
+            "params" => {
+                // Merged into the current params; null removes a key.
+                let Json::Obj(map) = v else {
+                    return Err("\"params\" must be an object".into());
+                };
+                for (name, value) in map {
+                    match value {
+                        Json::Null => {
+                            s.params.remove(name);
+                        }
+                        Json::Str(x) => {
+                            s.params.insert(name.clone(), x.clone());
+                        }
+                        Json::Bool(b) => {
+                            s.params.insert(name.clone(), b.to_string());
+                        }
+                        Json::Num(n) if n.fract() == 0.0 && n.abs() < 9.0e15 => {
+                            s.params.insert(name.clone(), (*n as i64).to_string());
+                        }
+                        _ => return Err(format!("param \"{name}\" must be a string, integer, boolean or null")),
+                    }
+                }
+            }
             other => return Err(format!("unknown setting \"{other}\"")),
         }
     }
@@ -173,17 +221,9 @@ fn load_presets(file: &Path) -> Result<Presets, String> {
     Ok(Presets { default, items })
 }
 
-struct Match {
-    path: PathBuf,
-    root: PathBuf,
-    size: i64,
-    kind: &'static str,
-}
-
 struct Cache {
     at: u64,
     matches: Vec<Match>,
-    bytes: u64,
 }
 
 struct State {
@@ -191,6 +231,7 @@ struct State {
     presets: Presets,
     active: Option<String>,
     settings: Settings,
+    slots: Vec<Vec<u8>>,
     program: Option<Program>,
     host: host::Host,
     cache: Option<Cache>,
@@ -200,15 +241,27 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-fn load_program(path: &Path, host: &host::Host) -> Result<Program, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    Program::load(&bytes, crate::SCHEMA, &host.registry).map_err(|e| {
+fn load_ref(r: &ProgramRef, slots: &[Vec<u8>], host: &host::Host) -> Result<Program, String> {
+    match r {
+        ProgramRef::Slot(i) => match slots.get(*i) {
+            Some(bytes) => load_bytes(bytes, &format!("program slot {i}"), host),
+            None => Err(format!("no program slot {i} ({} provided with --lmcode)", slots.len())),
+        },
+        ProgramRef::File(path) => {
+            let bytes = std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+            load_bytes(&bytes, &path.display().to_string(), host)
+        }
+    }
+}
+
+fn load_bytes(bytes: &[u8], label: &str, host: &host::Host) -> Result<Program, String> {
+    Program::load(bytes, crate::SCHEMA, &host.registry).map_err(|e| {
         let why = match e.code.as_str() {
             "LOAD_SCHEMA_MISMATCH" => "lmclean schema mismatch",
             "LOAD_UNBOUND" => "lmclean import mismatch",
             _ => "invalid lmclean bytecode",
         };
-        format!("{}: {why} ({})", path.display(), e.code)
+        format!("{label}: {why} ({})", e.code)
     })
 }
 
@@ -241,11 +294,12 @@ fn classify(program: &Program) -> Result<Roles, String> {
 }
 
 fn scan(program: &Program, host: &mut host::Host, s: &Settings) -> Result<Cache, String> {
+    *host.params.borrow_mut() = s.params.clone();
     program.run(&mut host.context, &host.registry).map_err(|e| e.message)?;
     let Roles { ignores, selects, reports } = classify(program)?;
     let roots: Vec<PathBuf> = if s.paths.is_empty() { vec![PathBuf::from(".")] } else { s.paths.clone() };
     let opts = walk::Options { hidden: s.hidden, max_depth: s.max_depth };
-    let (mut matches, mut bytes) = (Vec::new(), 0u64);
+    let mut matches = Vec::new();
     for root in &roots {
         walk::walk(root, &opts, &mut |cand| {
             let obj = host.context.insert("File", crate::file_of(cand));
@@ -269,7 +323,6 @@ fn scan(program: &Program, host: &mut host::Host, s: &Settings) -> Result<Cache,
                     program.call(i, &mut host.context, &host.registry, vec![arg.clone()])?;
                 }
                 let size = walk::rsize(&cand.path);
-                bytes += size as u64;
                 let kind = if cand.metadata.is_dir() {
                     "dir"
                 } else if cand.metadata.is_symlink() {
@@ -277,7 +330,13 @@ fn scan(program: &Program, host: &mut host::Host, s: &Settings) -> Result<Cache,
                 } else {
                     "file"
                 };
-                matches.push(Match { path: cand.path.clone(), root: root.clone(), size, kind });
+                let modified = cand
+                    .metadata
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_secs() as i64);
+                matches.push(Match { path: cand.path.clone(), root: root.clone(), size, kind, modified });
                 Ok(false)
             })();
             let _ = host.context.take::<host::File>(obj);
@@ -285,13 +344,34 @@ fn scan(program: &Program, host: &mut host::Host, s: &Settings) -> Result<Cache,
         })
         .map_err(|e| e.message)?;
     }
-    Ok(Cache { at: now_secs(), matches, bytes })
+    Ok(Cache { at: now_secs(), matches })
 }
 
 // ---- JSON output helpers (byte-exact path escaping) ------------------------
 
 fn jstr(out: &mut Vec<u8>, bytes: &[u8]) {
     let _ = write_json_string(out, bytes);
+}
+
+fn jparams(out: &mut Vec<u8>, params: &BTreeMap<String, String>) {
+    out.push(b'{');
+    for (i, (k, v)) in params.iter().enumerate() {
+        if i > 0 {
+            out.push(b',');
+        }
+        jstr(out, k.as_bytes());
+        out.push(b':');
+        jstr(out, v.as_bytes());
+    }
+    out.push(b'}');
+}
+
+fn jprogram(out: &mut Vec<u8>, p: &Option<ProgramRef>) {
+    match p {
+        Some(ProgramRef::Slot(i)) => out.extend_from_slice(i.to_string().as_bytes()),
+        Some(ProgramRef::File(path)) => jstr(out, &walk::path_bytes(path)),
+        None => out.extend_from_slice(b"null"),
+    }
 }
 
 fn jopt_path(out: &mut Vec<u8>, p: &Option<PathBuf>) {
@@ -326,7 +406,7 @@ impl State {
             None => o.extend_from_slice(b"null"),
         }
         o.extend_from_slice(b",\"program\":");
-        jopt_path(&mut o, &s.program);
+        jprogram(&mut o, &s.program);
         o.extend_from_slice(b",\"paths\":[");
         for (i, p) in s.paths.iter().enumerate() {
             if i > 0 {
@@ -341,28 +421,31 @@ impl State {
         }
         o.extend_from_slice(b",\"trash\":");
         jopt_path(&mut o, &s.trash);
+        o.extend_from_slice(b",\"params\":");
+        jparams(&mut o, &s.params);
         o.extend_from_slice(format!(",\"allow_exec\":{}}}", self.cfg.allow_exec).as_bytes());
         o
     }
 
-    fn results_json(&self, cached: bool) -> Option<Vec<u8>> {
+    /// The cached scan seen through `filter`: totals, the selection's summary
+    /// breakdowns and (unless summary-only) one page of matches.
+    fn results_json(&self, cached: bool, filter: &Filter, page: &Page) -> Option<Vec<u8>> {
         let c = self.cache.as_ref()?;
+        let now = now_secs() as i64;
+        let sel = view::select(&c.matches, filter, now);
+        let total_bytes: i64 = c.matches.iter().map(|m| m.size).sum();
         let mut o = format!(
-            "{{\"ok\":true,\"cached\":{cached},\"scanned_at\":{},\"matched\":{},\"bytes\":{},\"matches\":[",
+            "{{\"ok\":true,\"cached\":{cached},\"scanned_at\":{},\"total_matched\":{},\"total_bytes\":{total_bytes},",
             c.at,
-            c.matches.len(),
-            c.bytes
+            c.matches.len()
         )
         .into_bytes();
-        for (i, m) in c.matches.iter().enumerate() {
-            if i > 0 {
-                o.push(b',');
-            }
-            o.extend_from_slice(b"{\"path\":");
-            jstr(&mut o, &walk::path_bytes(&m.path));
-            o.extend_from_slice(format!(",\"size\":{},\"kind\":\"{}\"}}", m.size, m.kind).as_bytes());
+        view::summary_fields(&sel, &mut o);
+        if !page.summary_only {
+            o.push(b',');
+            view::detail_fields(&sel, page, now, &mut o);
         }
-        o.extend_from_slice(b"]}");
+        o.push(b'}');
         Some(o)
     }
 
@@ -371,7 +454,7 @@ impl State {
         if next.program != self.settings.program || self.program.is_none() {
             self.program = match &next.program {
                 Some(p) => {
-                    let program = load_program(p, &self.host)?;
+                    let program = load_ref(p, &self.slots, &self.host)?;
                     classify(&program)?;
                     Some(program)
                 }
@@ -403,7 +486,7 @@ impl State {
             o.extend_from_slice(b"{\"name\":");
             jstr(&mut o, name.as_bytes());
             o.extend_from_slice(b",\"program\":");
-            jopt_path(&mut o, &s.program);
+            jprogram(&mut o, &s.program);
             o.extend_from_slice(b",\"paths\":[");
             for (j, p) in s.paths.iter().enumerate() {
                 if j > 0 {
@@ -411,7 +494,9 @@ impl State {
                 }
                 jstr(&mut o, &walk::path_bytes(p));
             }
-            o.extend_from_slice(format!("],\"hidden\":{}}}", s.hidden).as_bytes());
+            o.extend_from_slice(format!("],\"hidden\":{},\"params\":", s.hidden).as_bytes());
+            jparams(&mut o, &s.params);
+            o.push(b'}');
         }
         o.extend_from_slice(b"]}");
         o
@@ -450,42 +535,118 @@ impl State {
         }
     }
 
-    fn scan(&mut self) -> Resp {
+    fn scan(&mut self, query: &str) -> Resp {
+        let (filter, page) = match view::from_fields(&view::parse_query(query)) {
+            Ok(v) => v,
+            Err(e) => return fail(400, &e),
+        };
         let Some(program) = &self.program else {
             return fail(409, "no program configured: choose a preset or PUT /settings with \"program\"");
         };
         match scan(program, &mut self.host, &self.settings) {
             Ok(cache) => {
                 self.cache = Some(cache);
-                ok(self.results_json(false).unwrap_or_default())
+                ok(self.results_json(false, &filter, &page).unwrap_or_default())
             }
             Err(e) => fail(500, &e),
         }
     }
 
-    fn clean(&mut self) -> Resp {
-        if !self.cfg.allow_exec {
-            return fail(403, "deleting is disabled: start the server with --allow-exec");
+    fn results(&self, query: &str) -> Resp {
+        let (filter, page) = match view::from_fields(&view::parse_query(query)) {
+            Ok(v) => v,
+            Err(e) => return fail(400, &e),
+        };
+        match self.results_json(true, &filter, &page) {
+            Some(body) => ok(body),
+            None => fail(404, "no cached results: POST /scan first"),
         }
-        let Some(cache) = self.cache.take() else {
+    }
+
+    /// Cleans the cached matches that pass `filter` (default: all of them).
+    /// Body: `{"filter":{..},"dry_run":bool,"expect_matched":N,"expect_bytes":B}`.
+    /// `expect_*` pin what the client reviewed: any drift is a 409 and nothing
+    /// is touched. Unselected matches stay cached for a later round.
+    fn clean(&mut self, body: &[u8]) -> Resp {
+        let doc = if body.iter().all(u8::is_ascii_whitespace) {
+            Json::Obj(vec![])
+        } else {
+            match std::str::from_utf8(body).map_err(|e| e.to_string()).and_then(json::parse) {
+                Ok(d @ Json::Obj(_)) => d,
+                Ok(_) => return fail(400, "body must be a JSON object"),
+                Err(e) => return fail(400, &format!("invalid JSON: {e}")),
+            }
+        };
+        let Json::Obj(items) = &doc else { unreachable!() };
+        for (k, _) in items {
+            if !["filter", "dry_run", "expect_matched", "expect_bytes"].contains(&k.as_str()) {
+                return fail(400, &format!("unknown key \"{k}\""));
+            }
+        }
+        let filter = match doc.get("filter") {
+            None => Filter::default(),
+            Some(f) => match Filter::from_json(f) {
+                Ok(f) => f,
+                Err(e) => return fail(400, &e),
+            },
+        };
+        let dry_run = match doc.get("dry_run") {
+            None => false,
+            Some(Json::Bool(b)) => *b,
+            Some(_) => return fail(400, "\"dry_run\" must be a boolean"),
+        };
+        let expect = |key: &str| -> Result<Option<i64>, Resp> {
+            match doc.get(key) {
+                None => Ok(None),
+                Some(Json::Num(n)) if n.fract() == 0.0 && *n >= 0.0 => Ok(Some(*n as i64)),
+                Some(_) => Err(fail(400, &format!("\"{key}\" must be a nonnegative integer"))),
+            }
+        };
+        let (want_matched, want_bytes) = match (expect("expect_matched"), expect("expect_bytes")) {
+            (Ok(a), Ok(b)) => (a, b),
+            (Err(r), _) | (_, Err(r)) => return r,
+        };
+        if !dry_run && !self.cfg.allow_exec {
+            return fail(403, "deleting is disabled: start the server with --allow-exec (dry_run is always allowed)");
+        }
+        let Some(cache) = self.cache.as_mut() else {
             return fail(409, "no cached scan: POST /scan first");
         };
+        let now = now_secs() as i64;
+        let sel = view::select(&cache.matches, &filter, now);
+        let sel_bytes: i64 = sel.iter().map(|m| m.size).sum();
+        if want_matched.is_some_and(|n| n != sel.len() as i64) || want_bytes.is_some_and(|n| n != sel_bytes) {
+            return Resp {
+                status: 409,
+                body: format!(
+                    "{{\"ok\":false,\"error\":\"selection differs from expect_*\",\"matched\":{},\"bytes\":{sel_bytes}}}",
+                    sel.len()
+                )
+                .into_bytes(),
+            };
+        }
+        if dry_run {
+            let mut o = b"{\"ok\":true,\"dry_run\":true,\"would_delete\":{".to_vec();
+            view::summary_fields(&sel, &mut o);
+            o.extend_from_slice(b"}}");
+            return ok(o);
+        }
         let mut sink = match &self.settings.trash {
             Some(dir) => match trash::Trash::open(dir) {
                 Ok(t) => Some(t),
-                Err(e) => {
-                    self.cache = Some(cache);
-                    return fail(500, &format!("trash: {e}"));
-                }
+                Err(e) => return fail(500, &format!("trash: {e}")),
             },
             None => None,
         };
+        let selected = sel.len();
+        let mut done: Vec<PathBuf> = Vec::new(); // gone from disk, drop from cache
         let (mut deleted, mut missing, mut failed, mut bytes) = (0u64, 0u64, 0u64, 0u64);
-        for m in &cache.matches {
+        for m in &sel {
             let meta = match std::fs::symlink_metadata(&m.path) {
                 Ok(meta) => meta,
                 Err(_) => {
                     missing += 1;
+                    done.push(m.path.clone());
                     continue;
                 }
             };
@@ -498,6 +659,7 @@ impl State {
                 Ok(()) => {
                     deleted += 1;
                     bytes += m.size as u64;
+                    done.push(m.path.clone());
                 }
                 Err(e) => {
                     eprintln!("lmclean: cannot remove {}: {e}", m.path.display());
@@ -505,9 +667,14 @@ impl State {
                 }
             }
         }
+        cache.matches.retain(|m| !done.contains(&m.path));
+        let remaining = cache.matches.len();
+        if remaining == 0 {
+            self.cache = None;
+        }
         let mode = if sink.is_some() { "trash" } else { "unlink" };
         let body = format!(
-            "{{\"ok\":{},\"mode\":\"{mode}\",\"deleted\":{deleted},\"missing\":{missing},\"failed\":{failed},\"bytes\":{bytes}}}",
+            "{{\"ok\":{},\"mode\":\"{mode}\",\"selected\":{selected},\"deleted\":{deleted},\"missing\":{missing},\"failed\":{failed},\"bytes\":{bytes},\"remaining\":{remaining}}}",
             failed == 0
         )
         .into_bytes();
@@ -549,6 +716,7 @@ impl State {
 struct Request {
     method: String,
     path: String,
+    query: String,
     auth: Option<String>,
     body: Vec<u8>,
 }
@@ -600,10 +768,13 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, Resp> {
         }
     }
     body.truncate(length);
-    let path = target.split(['?', '#']).next().unwrap_or("/").trim_end_matches('/');
+    let target = target.split('#').next().unwrap_or("/");
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let path = path.trim_end_matches('/');
     Ok(Request {
         method: method.to_string(),
         path: if path.is_empty() { "/".into() } else { path.into() },
+        query: query.to_string(),
         auth,
         body,
     })
@@ -659,12 +830,9 @@ fn route(state: &mut State, req: &Request) -> (Resp, bool) {
         ("/presets", "GET") => ok(state.presets_json()),
         ("/settings", "GET") => ok(state.settings_json()),
         ("/settings", "PUT" | "PATCH") => state.put_settings(&req.body),
-        ("/scan", "POST") => state.scan(),
-        ("/results", "GET") => match state.results_json(true) {
-            Some(body) => ok(body),
-            None => fail(404, "no cached results: POST /scan first"),
-        },
-        ("/clean", "POST") => state.clean(),
+        ("/scan", "POST") => state.scan(&req.query),
+        ("/results", "GET") => state.results(&req.query),
+        ("/clean", "POST") => state.clean(&req.body),
         ("/restore", "POST") => state.restore(&req.body),
         ("/shutdown", "POST") => return (ok(b"{\"ok\":true,\"shutdown\":true}".to_vec()), true),
         ("/health" | "/presets" | "/settings" | "/scan" | "/results" | "/clean" | "/restore" | "/shutdown", _) => {
@@ -675,15 +843,28 @@ fn route(state: &mut State, req: &Request) -> (Resp, bool) {
     (resp, false)
 }
 
+/// Terminal frame matching how we were invoked: one program is a single
+/// envelope, several (a `lmcode_build` builder) a builder envelope with one
+/// result per part, in add order.
+fn exit_frame(parts: usize, how: &str) -> i32 {
+    let part = format!("{{\"shutdown\":\"{how}\"}}");
+    if parts < 2 {
+        return frame::ok(&part);
+    }
+    let results = vec![part; parts].join(",");
+    frame::emit(&format!("{{\"ok\":true,\"result\":[{results}],\"parts\":{parts}}}"));
+    0
+}
+
 pub fn run(cfg: Config) -> i32 {
     let host = match host::Host::new() {
         Ok(h) => h,
-        Err(e) => return report_error("run", &e),
+        Err(e) => return frame::error("run", &e),
     };
     let presets = match &cfg.presets {
         Some(file) => match load_presets(file) {
             Ok(p) => p,
-            Err(e) => return report_app_failure(&e),
+            Err(e) => return frame::app_failure(&e),
         },
         None => Presets { default: None, items: Vec::new() },
     };
@@ -691,8 +872,7 @@ pub fn run(cfg: Config) -> i32 {
         Some(name) => match presets.items.iter().any(|(n, _)| n == name) {
             true => Some(name.clone()),
             false => {
-                println!("{}", error_json("cli", &Error::new("CLI_USAGE", format!("no such preset \"{name}\""))));
-                return 2;
+                return frame::usage(format!("no such preset \"{name}\""));
             }
         },
         None => presets.default.clone(),
@@ -702,10 +882,37 @@ pub fn run(cfg: Config) -> i32 {
         .and_then(|n| presets.items.iter().find(|(p, _)| p == n))
         .map(|(_, s)| s.clone())
         .unwrap_or_default();
+    let mut slots = Vec::new();
+    for file in &cfg.programs {
+        let bytes = match std::fs::read(file) {
+            Ok(b) => b,
+            Err(_) => return frame::app_failure("cannot read program input"),
+        };
+        if let Err(e) = load_bytes(&bytes, "--lmcode program", &host).and_then(|p| classify(&p).map(|_| ())) {
+            return frame::error("load", &Error::new("LOAD_FAILED", e));
+        }
+        slots.push(bytes);
+    }
+    for (name, preset) in &presets.items {
+        if let Some(ProgramRef::Slot(i)) = preset.program {
+            if i >= slots.len() {
+                return frame::app_failure(&format!(
+                    "preset \"{name}\": program slot {i} but only {} --lmcode program(s) provided",
+                    slots.len()
+                ));
+            }
+        }
+    }
+    let mut settings = settings;
+    // A lone program (what `run_lmcode` supplies for a single script) is the
+    // implicit choice when no preset says otherwise.
+    if settings.program.is_none() && slots.len() == 1 {
+        settings.program = Some(ProgramRef::Slot(0));
+    }
     let program = match &settings.program {
-        Some(path) => match load_program(path, &host).and_then(|p| classify(&p).map(|_| p)) {
+        Some(r) => match load_ref(r, &slots, &host).and_then(|p| classify(&p).map(|_| p)) {
             Ok(p) => Some(p),
-            Err(e) => return report_error("load", &Error::new("LOAD_FAILED", e)),
+            Err(e) => return frame::error("load", &Error::new("LOAD_FAILED", e)),
         },
         None => None,
     };
@@ -713,21 +920,28 @@ pub fn run(cfg: Config) -> i32 {
     let addr = match cfg.listen.to_socket_addrs().ok().and_then(|mut a| a.next()) {
         Some(a) => a,
         None => {
-            println!("{}", error_json("cli", &Error::new("CLI_USAGE", format!("cannot resolve --listen {}", cfg.listen))));
-            return 2;
+            return frame::usage(format!("cannot resolve --listen {}", cfg.listen));
         }
     };
     if !addr.ip().is_loopback() && cfg.token.is_none() {
-        println!("{}", error_json("cli", &Error::new("CLI_USAGE", "a non-loopback --listen address requires --token")));
-        return 2;
+        return frame::usage("a non-loopback --listen address requires --token");
     }
     let listener = match TcpListener::bind(addr).and_then(|l| l.set_nonblocking(true).map(|()| l)) {
         Ok(l) => l,
-        Err(e) => return report_app_failure(&format!("cannot listen on {addr}: {e}")),
+        Err(e) => return frame::app_failure(&format!("cannot listen on {addr}: {e}")),
     };
     let bound = listener.local_addr().map(|a| a.to_string()).unwrap_or_default();
     let idle = cfg.idle;
-    let mut state = State { cfg, presets, active: start, settings, program, host, cache: None };
+    let mut state = State { cfg, presets, active: start, settings, slots, program, host, cache: None };
+    // Written (atomically, via rename) once we accept connections: lmscript's
+    // run_lmcode only relays host stdout when the host exits, so scripts find
+    // the port here instead of on stdout.
+    if let Some(file) = &state.cfg.port_file {
+        let tmp = file.with_extension("tmp-lmclean");
+        if let Err(e) = std::fs::write(&tmp, &bound).and_then(|()| std::fs::rename(&tmp, file)) {
+            return frame::app_failure(&format!("cannot write --port-file: {e}"));
+        }
+    }
     println!("{{\"listening\":\"{bound}\"}}");
     let _ = io::stdout().flush();
 
@@ -745,14 +959,12 @@ pub fn run(cfg: Config) -> i32 {
                 write_response(&mut stream, &resp);
                 last = Instant::now();
                 if stop {
-                    println!("{{\"shutdown\":\"requested\"}}");
-                    return 0;
+                    return exit_frame(state.slots.len(), "requested");
                 }
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 if idle.is_some_and(|limit| last.elapsed() >= limit) {
-                    println!("{{\"shutdown\":\"idle\"}}");
-                    return 0;
+                    return exit_frame(state.slots.len(), "idle");
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }

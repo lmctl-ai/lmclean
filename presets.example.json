@@ -1,9 +1,0 @@
-{
-  "default": "tmp",
-  "presets": {
-    "tmp":        { "program": "tests/fixtures/clean-tmp.dslb",              "paths": ["/var/tmp"] },
-    "build-dirs": { "program": "tests/fixtures/clean-build-dirs.dslb",       "paths": ["."] },
-    "stale-dirs": { "program": "tests/fixtures/clean-stale-build-dirs.dslb", "paths": ["."], "trash": "/tmp/lmclean-trash" },
-    "tmp-vcs-safe": { "program": "tests/fixtures/clean-ignore.dslb",         "paths": ["."], "hidden": true }
-  }
-}

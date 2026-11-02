@@ -49,10 +49,16 @@
   `v<VERSION>` with binaries + LICENSE + SHA256SUMS. No THIRD_PARTY_NOTICES.md:
   lmclean has no third-party code — its only dependency is the first-party
   dslvm, pinned by git rev in Cargo.toml (see 03), not tracking moving main.
-- **Examples are compiler-hostage**: rule-entry `.lms` sources need `savedsl`
-  to export `.dslb`; both the released lmscript and the current mono build
-  removed it, so CI runs the gate with `LMCLEAN_SKIP_EXAMPLES=1` (cargo tests +
-  build + R42 flags only) until an export path returns.
+- **Examples are lmscript drivers**: `savedsl` is gone, so every example ends
+  with a `run_lmcode` call that launches the host with `--lmcode $DSLFILE`
+  and forwards ARGV. The host therefore speaks the return-frame protocol
+  (`src/frame.rs`, see 03) instead of printing a bare summary line; the old
+  `{"ok":true,"matched":..}` line became the frame's `result`.
+- **Rule parameters**: `param_int`/`param_str` host functions (schema change)
+  read a shared map filled from `--param` or the server's `params` setting, so
+  clients can tune the compiled rule's thresholds/name lists without
+  recompiling. The schema hash changed with them; programs are recompiled on
+  every run, so nothing on disk is stale.
 - **Self-contained recursive size**: `rsize` is computed natively with std::fs
   (`walk::rsize`), never by shelling out to `du`/`df` — the host must stay
   zero-dependency and portable, and sizes must be gate-deterministic. Exact
@@ -64,18 +70,17 @@
   per-match `"size"` and summary `"bytes"` report rsize, computed once at
   match time only — never for non-matches, and before any deletion.
 - **Server mode (`--serve`)**: std-only single-threaded HTTP/1.1 (no new
-  dependencies, Cargo.lock unchanged), hand-written JSON reader in
-  `src/json.rs`. State = settings (program/paths/hidden/max_depth/trash) +
-  verified `Program` + cached scan. `POST /scan` caches matches; `/clean`
-  acts on exactly that cache (so what was reviewed is what is removed) and
-  consumes it; any settings change drops it. Deletion is opt-in at server
-  start (`--allow-exec`) to keep the dry-run-by-default contract; non-loopback
-  bind requires `--token`. Presets live in a JSON file (relative paths resolve
-  against the file). Lifetime: `POST /shutdown` or `--idle-timeout` (default
-  300s). The scan loop in `server.rs` duplicates the CLI's ignore/select/report
-  dispatch rather than refactoring `main.rs::Sweep`; keep the two in step.
-- **Server example tests need committed bytecode**: CI cannot compile `.lms`,
-  so `tests/fixtures/*.dslb` are prebuilt and committed; CI sets
-  `LMCLEAN_REQUIRE_EXAMPLES=1` so a missing fixture fails instead of skipping.
-  Fixtures are bound to the `clean.dsl.json` hash and must be rebuilt with it.
-
+  dependencies), hand-written JSON reader (`src/json.rs`). State = settings
+  (program ref, paths, hidden, max_depth, trash, params) + verified `Program`
+  + cached scan. Programs arrive as numbered `--lmcode` slots (one per
+  `run_lmcode` program/builder part); presets name a slot or a file path.
+  `POST /scan` caches matches; `GET /results` slices the cache with
+  filters/sort/paging/summaries (`src/view.rs`) without re-walking; `POST
+  /clean` acts on a filtered selection, supports `dry_run` and
+  `expect_matched/expect_bytes` pinning (409 on drift), and keeps unselected
+  matches cached. Any settings change drops the cache. Real deletes are opt-in
+  at start (`--allow-exec`); `dry_run` is always allowed; non-loopback bind
+  requires `--token`. Lifetime: `POST /shutdown` or `--idle-timeout` (default
+  300s). `--port-file` because run_lmcode buffers host stdout until exit. The
+  scan loop in `server.rs` duplicates the CLI's ignore/select/report dispatch
+  rather than refactoring `main.rs::Sweep`; keep the two in step.

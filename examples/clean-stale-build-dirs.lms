@@ -1,13 +1,15 @@
 # lmclean rule pack: stale generated directories.
-# Selects build output dirs (target/dist/build/out) whose own mtime is more
-# than 24 hours old. A matched directory is removed recursively in exec mode
-# and its descendants are never re-filtered.
+# Selects build output dirs whose own mtime is older than stale_hours. A
+# matched directory is removed recursively in exec mode and its descendants
+# are never re-filtered.
+# Tunable: stale_hours (default 24), names (default "target,dist,build,out")
 program = _lmcode_ schema="../clean.dsl.json";
 @select
 fn stale_build_dir(f: File) -> bool implements Filter {
+  let names = "," + param_str("names", "target,dist,build,out") + ",";
   return f.is_dir()
-    && (f.name() == "target" || f.name() == "dist" || f.name() == "build" || f.name() == "out")
-    && now() - f.modified() > 24 * 3600;
+    && str_contains(names, "," + f.name() + ",")
+    && now() - f.modified() > param_int("stale_hours", 24) * 3600;
 }
 @report
 fn audit(f: File) -> void implements Report {
@@ -15,4 +17,13 @@ fn audit(f: File) -> void implements Report {
     + " (" + str(f.rsize() / 1048576) + " MiB reclaimable)");
 }
 end _lmcode_
-savedsl(program, ARGV[0]);
+
+# Driver: lmscript compiles the rules above, then run_lmcode launches this
+# host (ARGV[0]) with the program as --lmcode and forwards the remaining
+# arguments (PATHs, --exec, --param NAME=VALUE, --serve, ...).
+#   lmscript examples/NAME.lms target/release/lmclean [HOST OPTIONS] [PATH ...]
+host_args = [ARGV[0], "--lmcode", "$DSLFILE"];
+for (i in range(1, len(ARGV))) { host_args = concat(host_args, [ARGV[i]]); }
+r = run_lmcode(program, {command: host_args});
+assert(r.ok, "lmclean failed: " + json_stringify(r));
+print(json_stringify(r.result));

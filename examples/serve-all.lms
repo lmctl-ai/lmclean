@@ -1,0 +1,67 @@
+# lmclean server with every rule pack loaded: a builder hands the host one
+# --lmcode slot per program, in add order (slot 0..3). The presets file maps
+# names to slots (see serve-presets.json).
+#   lmscript examples/serve-all.lms target/release/lmclean --serve \
+#       --presets examples/serve-presets.json [--allow-exec] [--idle-timeout S]
+s = load_schema(schema="../clean.dsl.json");
+tmp = _lmcode_ s;
+@select
+fn stale_junk(f: File) -> bool implements Filter {
+  let exts = "," + param_str("exts", "tmp,log") + ",";
+  let stale = now() - f.modified() > param_int("stale_days", 7) * 24 * 3600;
+  return f.is_file() && stale && str_contains(exts, "," + f.extension() + ",");
+}
+@report
+fn audit(f: File) -> void implements Report {
+  print("lmclean matched " + f.path() + " (" + str(f.size()) + " bytes)");
+}
+end _lmcode_
+dirs = _lmcode_ s;
+@select
+fn build_dir(f: File) -> bool implements Filter {
+  let names = "," + param_str("names", "node_modules,target") + ",";
+  return f.is_dir() && str_contains(names, "," + f.name() + ",");
+}
+@report
+fn audit(f: File) -> void implements Report {
+  print("lmclean matched directory " + f.path());
+}
+end _lmcode_
+ign = _lmcode_ s;
+@ignore
+fn skip_vcs(f: File) -> bool implements Ignore {
+  let names = "," + param_str("ignore", ".git,.svn,.hg") + ",";
+  return f.is_dir() && str_contains(names, "," + f.name() + ",");
+}
+@select
+fn stale_tmp(f: File) -> bool implements Filter {
+  let stale = now() - f.modified() > param_int("stale_days", 7) * 24 * 3600;
+  return f.is_file() && stale && f.extension() == "tmp";
+}
+@report
+fn audit(f: File) -> void implements Report {
+  print("lmclean matched " + f.path());
+}
+end _lmcode_
+stale = _lmcode_ s;
+@select
+fn stale_build_dir(f: File) -> bool implements Filter {
+  let names = "," + param_str("names", "target,dist,build,out") + ",";
+  return f.is_dir()
+    && str_contains(names, "," + f.name() + ",")
+    && now() - f.modified() > param_int("stale_hours", 24) * 3600;
+}
+@report
+fn audit(f: File) -> void implements Report {
+  print("lmclean matched stale directory " + f.path()
+    + " (" + str(f.rsize() / 1048576) + " MiB reclaimable)");
+}
+end _lmcode_
+
+host_prefix = [ARGV[0]];
+for (i in range(1, len(ARGV))) { host_prefix = concat(host_prefix, [ARGV[i]]); }
+b = lmcode_build(host_prefix);
+for (p in [tmp, dirs, ign, stale]) { b.add(p, ["--lmcode", "$DSLFILE"]); }
+r = run_lmcode(b);
+assert(r.ok, "lmclean failed: " + json_stringify(r));
+print(json_stringify(r.result));
