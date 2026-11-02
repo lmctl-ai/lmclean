@@ -45,7 +45,13 @@ if [ -z "$LMCLEAN_SKIP_EXAMPLES" ]; then
 HOST_BIN="$(pwd -W 2>/dev/null || pwd)/$BIN"
 [ -f "$BIN.exe" ] && HOST_BIN="$HOST_BIN.exe"
 # lm NAME [HOST ARGS...] - run examples/NAME.lms against the release host.
-lm() { local ex="$1"; shift; "$LMSCRIPT_BIN" --no-preflight "examples/$ex.lms" "$HOST_BIN" "$@"; }
+# stdout is normalized for portability: Windows hosts report paths with
+# backslashes (JSON-escaped as \\) and may emit CRLF; the assertions below use
+# forward-slash paths. stderr is untouched. pipefail keeps lmscript's status.
+lm() {
+  local ex="$1"; shift
+  "$LMSCRIPT_BIN" --no-preflight "examples/$ex.lms" "$HOST_BIN" "$@" | tr -d '\r' | sed 's#\\\\#/#g'
+}
 note "examples compile and run with $LMSCRIPT_BIN"
 lm clean-tmp "$(mktemp -d)" >/dev/null || fail "clean-tmp example does not run"
 
@@ -128,7 +134,7 @@ printf '%s\n' "$OUT" | assert_json_lines
 [ -f "$TRASH/old.tmp" ] || fail "old.tmp not in trash"
 [ -f "$TRASH/sub/nested.tmp" ] || fail "nested.tmp not in trash preserving rel path"
 [ -f "$TRASH/manifest.jsonl" ] || fail "manifest missing"
-[ "$(wc -l < "$TRASH/manifest.jsonl")" = 3 ] || fail "manifest should have 3 lines"
+[ "$(wc -l < "$TRASH/manifest.jsonl" | tr -d ' ')" = 3 ] || fail "manifest should have 3 lines"
 assert_json_lines < "$TRASH/manifest.jsonl"
 OUT="$(lm clean-tmp --trash "$TRASH" --restore)" || fail "restore exit != 0"
 printf '%s\n' "$OUT" | assert_json_lines
