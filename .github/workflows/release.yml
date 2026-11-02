@@ -50,6 +50,18 @@ jobs:
           [[ "$(target/release/lmclean --version | tr -d '\r')" == "lmclean $LMCLEAN_VERSION" ]]
           mkdir -p dist
           cp 'target/release/lmclean${{ matrix.ext }}' 'dist/lmclean-${{ matrix.label }}${{ matrix.ext }}'
+      # REST server integration tests. The protocol tests need no bytecode.
+      # The per-example tests drive every examples/*.lms rule pack through the
+      # server using the prebuilt bytecode committed in tests/fixtures (CI
+      # cannot compile .lms: the released lmscript dropped `savedsl`).
+      # LMCLEAN_REQUIRE_EXAMPLES=1 turns a missing fixture into a failure
+      # instead of a silent skip, so this step cannot go green without
+      # actually running the examples.
+      - name: Server integration tests (all examples)
+        env:
+          LMCLEAN_REQUIRE_EXAMPLES: '1'
+          LMCLEAN_EXAMPLES_DIR: tests/fixtures
+        run: cargo test --locked --test server -- --test-threads=1
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: binary-${{ matrix.label }}

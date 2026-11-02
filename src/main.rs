@@ -2,6 +2,8 @@
 //! bytecode v6 and runs it against the files it walks. Dry-run is the default;
 //! `--exec` deletes, `--trash DIR` moves matches into DIR with a manifest.
 mod host;
+mod json;
+mod server;
 mod trash;
 mod walk;
 
@@ -13,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 // Include exact bytes, including whitespace: the schema hash binds every program.
 const SCHEMA: &[u8] = include_bytes!("../clean.dsl.json");
-const USAGE: &str = "usage: --version | --lmcode-schema [--json] | --lmcode-signatures | --lmcode FILE [--exec] [--trash DIR] [--restore] [--hidden] [--max-depth N] [PATH ...]";
+const USAGE: &str = "usage: --version | --serve [...] (see --serve usage) | --lmcode-schema [--json] | --lmcode-signatures | --lmcode FILE [--exec] [--trash DIR] [--restore] [--hidden] [--max-depth N] [PATH ...]";
 
 fn main() {
     std::process::exit(match run() {
@@ -231,6 +233,18 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             println!("{signature}");
         }
         return Ok(0);
+    }
+    if args.first().is_some_and(|a| a == "--serve") {
+        return Ok(match server::parse_args(&args[1..]) {
+            Ok(cfg) => server::run(cfg),
+            Err(message) => {
+                println!(
+                    "{}",
+                    error_json("cli", &Error::new("CLI_USAGE", format!("{message}; {}", server::SERVE_USAGE)))
+                );
+                2
+            }
+        });
     }
     if args.len() < 2 || args[0] != "--lmcode" {
         println!("{}", error_json("cli", &Error::new("CLI_USAGE", USAGE)));

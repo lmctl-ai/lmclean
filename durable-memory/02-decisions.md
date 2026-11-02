@@ -63,3 +63,19 @@
   are counted per link (no inode dedup). Unreadable subtrees are skipped. The
   per-match `"size"` and summary `"bytes"` report rsize, computed once at
   match time only — never for non-matches, and before any deletion.
+- **Server mode (`--serve`)**: std-only single-threaded HTTP/1.1 (no new
+  dependencies, Cargo.lock unchanged), hand-written JSON reader in
+  `src/json.rs`. State = settings (program/paths/hidden/max_depth/trash) +
+  verified `Program` + cached scan. `POST /scan` caches matches; `/clean`
+  acts on exactly that cache (so what was reviewed is what is removed) and
+  consumes it; any settings change drops it. Deletion is opt-in at server
+  start (`--allow-exec`) to keep the dry-run-by-default contract; non-loopback
+  bind requires `--token`. Presets live in a JSON file (relative paths resolve
+  against the file). Lifetime: `POST /shutdown` or `--idle-timeout` (default
+  300s). The scan loop in `server.rs` duplicates the CLI's ignore/select/report
+  dispatch rather than refactoring `main.rs::Sweep`; keep the two in step.
+- **Server example tests need committed bytecode**: CI cannot compile `.lms`,
+  so `tests/fixtures/*.dslb` are prebuilt and committed; CI sets
+  `LMCLEAN_REQUIRE_EXAMPLES=1` so a missing fixture fails instead of skipping.
+  Fixtures are bound to the `clean.dsl.json` hash and must be rebuilt with it.
+

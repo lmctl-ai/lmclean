@@ -128,14 +128,68 @@ The schema bytes are SHA-256-bound into every compiled program: any change to
 `clean.dsl.json` (even whitespace) breaks loading of previously compiled
 `.dslb` files.
 
+## Server mode (`--serve`)
+
+A small REST server around the same rule engine, for clients that want to scan
+repeatedly, review, and then clean without re-walking. std only, one connection
+at a time, JSON in/out, `Connection: close`.
+
+```
+lmclean --serve [--listen ADDR:PORT]   # default 127.0.0.1:0 (ephemeral port)
+                [--presets FILE]       # named rule/settings bundles, see presets.example.json
+                [--preset NAME]        # start on this preset (default: the file's "default")
+                [--idle-timeout SECS]  # exit after SECS without a request; default 300, 0 = never
+                [--allow-exec]         # permit POST /clean and /restore (default: scan-only)
+                [--token TOKEN]        # require "Authorization: Bearer TOKEN"
+```
+
+On startup stdout gets `{"listening":"127.0.0.1:PORT"}` (scriptable even with
+port 0); on exit `{"shutdown":"requested"}` or `{"shutdown":"idle"}`, exit code
+0. A non-loopback `--listen` requires `--token`. Exit codes: `2` usage, `3`
+start-preset bytecode fails to load, `4` unreadable/invalid presets file.
+
+| Request | Effect |
+|---|---|
+| `GET /health` | liveness, version, `cached`, `allow_exec`, `idle_timeout` |
+| `GET /presets` | the loaded presets, default and active name |
+| `GET /settings` | current `program`, `paths`, `hidden`, `max_depth`, `trash` |
+| `PUT /settings` (or `PATCH`) | partial update; `{"preset":"name"}` loads a preset first, other keys override it. The program is loaded and verified immediately (400 on failure, nothing changes). Any change drops the cache. Editing without naming a preset makes `preset` `null` (custom) |
+| `POST /scan` | walk and **cache** the matches (never deletes): `{"matched","bytes","scanned_at","matches":[{"path","size","kind"}]}` |
+| `GET /results` | the cached scan, no walking (`"cached":true`); 404 if none |
+| `POST /clean` | delete (or move to `trash`) exactly the cached matches, then drop the cache. 403 without `--allow-exec`, 409 without a cached scan |
+| `POST /restore` | replay the trash manifest (`settings.trash`, or `{"trash":"DIR"}` in the body); needs `--allow-exec` |
+| `POST /shutdown` | reply, then exit |
+
+Dry-run stays the default over the wire: without `--allow-exec` the server can
+only scan. Matched sizes are the same recursive `rsize` as the CLI.
+
+```
+lmclean --serve --presets presets.example.json --idle-timeout 120 --allow-exec &
+curl -s localhost:$PORT/scan -X POST          # review the plan
+curl -s localhost:$PORT/results               # same result, from cache
+curl -s localhost:$PORT/settings -X PUT -d '{"preset":"build-dirs"}'
+curl -s localhost:$PORT/clean -X POST         # act on the cached scan
+curl -s localhost:$PORT/shutdown -X POST
+```
+
+A presets file is `{"default":"name","presets":{"name":{"program":"x.dslb",
+"paths":[...],"hidden":false,"max_depth":null,"trash":null}}}`; relative paths
+inside it resolve against the file's directory.
+
+Integration tests: `cargo test --test server` (runs everywhere, no bytecode
+needed for the protocol tests). The per-example tests need compiled bytecode in
+`tests/fixtures/` (see its README); CI requires it.
+
 ## Layout
 
 - `src/main.rs` — CLI, R42 flags, load/run/dispatch, exit protocol
 - `src/host.rs` — `File` type, registry wiring, arena handles, `print`/`now`
 - `src/walk.rs` — std::fs recursive walker (sorted, hidden-skip, depth limit)
 - `src/trash.rs` — trash moves with manifest, restore
+- `src/server.rs`, `src/json.rs` — `--serve` REST mode and its minimal JSON reader
 - `examples/` — `clean-tmp.lms`, `clean-build-dirs.lms`, `clean-ignore.lms`,
   `clean-stale-build-dirs.lms`
+- `tests/server.rs` — REST integration tests (protocol + one per example)
 - `test.sh` — the gate: unit tests, release build, example compilation,
   end-to-end dry-run/exec/trash/restore/exit-code/hidden checks
 
