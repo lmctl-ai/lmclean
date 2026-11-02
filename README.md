@@ -254,6 +254,9 @@ Presets file: `{"default":"name","presets":{"name":{"program":0,"paths":[...],
 "hidden":false,"max_depth":null,"trash":null,"params":{...}}}}`; relative paths
 resolve against the file's directory.
 
+End-to-end smoke (fake files, launch, query, delete, exit; curl only):
+`bash tests/e2e-server.sh` (needs `lmscript`).
+
 Tests: `cargo test --test server` (protocol tests need nothing; the example
 tests drive every `examples/*.lms` through `lmscript` and need `LMSCRIPT_BIN`
 or `lmscript` on PATH, `LMCLEAN_REQUIRE_EXAMPLES=1` makes them mandatory).

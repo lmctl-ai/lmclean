@@ -73,6 +73,11 @@ jobs:
           [[ "$(target/release/lmclean --version | tr -d '\r')" == "lmclean $LMCLEAN_VERSION" ]]
           mkdir -p dist
           cp 'target/release/lmclean${{ matrix.ext }}' 'dist/lmclean-${{ matrix.label }}${{ matrix.ext }}'
+      # Black-box end-to-end run over real HTTP (curl): create fake files,
+      # launch lmclean, query it several ways, preview and perform deletes,
+      # shut down and check the exit; then check the idle-timeout exit.
+      - name: End-to-end server smoke test
+        run: bash tests/e2e-server.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: binary-${{ matrix.label }}
