@@ -82,6 +82,9 @@ build_tree() {
 }
 
 WORK="$(mktemp -d)"
+# Git Bash: mktemp yields an MSYS path (/tmp/...) but the host reports native
+# ones (C:/Users/...); use the native form so output comparisons match.
+if command -v cygpath >/dev/null 2>&1; then WORK="$(cygpath -m "$WORK")"; fi
 trap 'rm -rf "$WORK"' EXIT
 
 # --- 1. dry-run (default): lists the right matches, removes nothing ---------
