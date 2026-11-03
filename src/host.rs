@@ -1,7 +1,7 @@
 //! The File host type and the rule-facing functions (print, now).
 //! Context owns every File handle; each handle lives for one walked candidate.
 use dslvm::{Context, Error, ObjRef, Registry, Value};
-use std::cell::RefCell;
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::rc::Rc;
@@ -22,6 +22,27 @@ pub struct File {
     pub is_dir: bool,
     pub is_symlink: bool,
     pub modified: i64,
+    pub accessed: i64,
+    pub rtimes: Cell<Option<(i64, i64)>>,
+    pub git: OnceCell<crate::git::GitInfo>,
+}
+
+impl File {
+    fn rtimes(&self) -> (i64, i64) {
+        if let Some(t) = self.rtimes.get() {
+            return t;
+        }
+        let t = crate::walk::rtimes(&crate::walk::path_from_bytes(&self.path));
+        self.rtimes.set(Some(t));
+        t
+    }
+
+    fn git_info(&self) -> crate::git::GitInfo {
+        *self.git.get_or_init(|| {
+            let _ = self.rtimes();
+            crate::git::inspect(&crate::walk::path_from_bytes(&self.path))
+        })
+    }
 }
 
 pub struct Host {
@@ -83,6 +104,27 @@ fn register(r: &mut Registry, params: Params) -> Result<(), Error> {
     })?;
     r.method("File", "modified", &[], "int", |ctx, this, _| {
         Ok(Value::Int(file_ref(ctx, this)?.modified))
+    })?;
+    r.method("File", "accessed", &[], "int", |ctx, this, _| {
+        Ok(Value::Int(file_ref(ctx, this)?.accessed))
+    })?;
+    r.method("File", "raccessed", &[], "int", |ctx, this, _| {
+        Ok(Value::Int(file_ref(ctx, this)?.rtimes().0))
+    })?;
+    r.method("File", "rmodified", &[], "int", |ctx, this, _| {
+        Ok(Value::Int(file_ref(ctx, this)?.rtimes().1))
+    })?;
+    r.method("File", "is_git_repo", &[], "bool", |ctx, this, _| {
+        Ok(Value::Bool(file_ref(ctx, this)?.git_info().is_repo))
+    })?;
+    r.method("File", "is_git_clean", &[], "bool", |ctx, this, _| {
+        Ok(Value::Bool(file_ref(ctx, this)?.git_info().is_clean))
+    })?;
+    r.method("File", "is_git_pushed", &[], "bool", |ctx, this, _| {
+        Ok(Value::Bool(file_ref(ctx, this)?.git_info().is_pushed))
+    })?;
+    r.method("File", "git_status", &[], "string", |ctx, this, _| {
+        Ok(Value::string(file_ref(ctx, this)?.git_info().status.as_bytes()))
     })?;
     // print goes to stderr: stdout stays machine-clean for the JSON protocol.
     r.function("print", &["string"], "void", |_, a| {

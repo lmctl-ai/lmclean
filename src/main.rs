@@ -2,6 +2,7 @@
 //! bytecode v6 and runs it against the files it walks. Dry-run is the default;
 //! `--exec` deletes, `--trash DIR` moves matches into DIR with a manifest.
 mod frame;
+mod git;
 mod host;
 mod json;
 mod server;
@@ -207,12 +208,8 @@ impl Sweep {
 
 fn file_of(cand: &walk::Candidate) -> host::File {
     let metadata = &cand.metadata;
-    let modified = metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let modified = walk::modified_secs(metadata);
+    let accessed = walk::accessed_secs(metadata);
     host::File {
         path: walk::path_bytes(&cand.path),
         name: cand.path.file_name().map(walk::os_bytes).unwrap_or_default(),
@@ -223,6 +220,9 @@ fn file_of(cand: &walk::Candidate) -> host::File {
         is_dir: metadata.is_dir(),
         is_symlink: metadata.is_symlink(),
         modified,
+        accessed,
+        rtimes: std::cell::Cell::new(None),
+        git: std::cell::OnceCell::new(),
     }
 }
 

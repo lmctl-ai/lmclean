@@ -46,6 +46,85 @@ fn is_hidden(name: &std::ffi::OsStr) -> bool {
     os_bytes(name).first() == Some(&b'.')
 }
 
+pub fn modified_secs(metadata: &fs::Metadata) -> i64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+pub fn accessed_secs(metadata: &fs::Metadata) -> i64 {
+    let mtime = modified_secs(metadata);
+    metadata
+        .accessed()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(mtime)
+}
+
+/// Recursive `(max_accessed, max_modified)` timestamps in Unix seconds across
+/// a candidate subtree. For a non-directory entry, returns its own `(accessed,
+/// modified)`. For a directory, walks all non-directory descendants (never
+/// following symlinks), ignoring `.git` internal metadata unless the directory
+/// contains no non-`.git` files; for an empty directory, falls back to the
+/// directory's own `(accessed, modified)`.
+pub fn rtimes(path: &Path) -> (i64, i64) {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(_) => return (0, 0),
+    };
+    let own_a = accessed_secs(&metadata);
+    let own_m = modified_secs(&metadata);
+    if !metadata.is_dir() {
+        return (own_a, own_m);
+    }
+    let mut work_a: Option<i64> = None;
+    let mut work_m: Option<i64> = None;
+    let mut vcs_a: Option<i64> = None;
+    let mut vcs_m: Option<i64> = None;
+    rtimes_walk(path, false, &mut work_a, &mut work_m, &mut vcs_a, &mut vcs_m);
+    match (work_a, work_m, vcs_a, vcs_m) {
+        (Some(a), Some(m), _, _) => (a, m),
+        (_, _, Some(a), Some(m)) => (a, m),
+        _ => (own_a, own_m),
+    }
+}
+
+fn rtimes_walk(
+    dir: &Path,
+    in_vcs: bool,
+    work_a: &mut Option<i64>,
+    work_m: &mut Option<i64>,
+    vcs_a: &mut Option<i64>,
+    vcs_m: &mut Option<i64>,
+) {
+    let Ok(read) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read.flatten() {
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        let is_git = in_vcs || entry.file_name() == ".git";
+        if meta.is_dir() {
+            rtimes_walk(&entry.path(), is_git, work_a, work_m, vcs_a, vcs_m);
+        } else {
+            let a = accessed_secs(&meta);
+            let m = modified_secs(&meta);
+            if is_git {
+                *vcs_a = Some(vcs_a.map_or(a, |prev| prev.max(a)));
+                *vcs_m = Some(vcs_m.map_or(m, |prev| prev.max(m)));
+            } else {
+                *work_a = Some(work_a.map_or(a, |prev| prev.max(a)));
+                *work_m = Some(work_m.map_or(m, |prev| prev.max(m)));
+            }
+        }
+    }
+}
+
 /// Recursive size in bytes, self-contained (std::fs only, no external du/df):
 /// the entry itself plus, for directories, all descendants recursively,
 /// counting only non-directory entries. Symlinks contribute their own

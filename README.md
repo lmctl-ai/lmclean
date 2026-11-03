@@ -140,7 +140,12 @@ mode, the `params` setting. The bundled packs document theirs
 `File` methods: `path()`, `name()`, `extension()` (no dot, empty if none),
 `size()` (own length), `rsize()` (recursive size, see above), `depth()`
 (relative to its search root; direct children = 0),
-`is_file()`, `is_dir()`, `is_symlink()`, `modified()` (mtime epoch seconds).
+`is_file()`, `is_dir()`, `is_symlink()`, `modified()` (mtime epoch seconds),
+`accessed()` (atime epoch seconds), `raccessed()` / `rmodified()` (recursive max
+atime/mtime across non-`.git` files in a directory subtree),
+`is_git_repo()`, `is_git_clean()` (clean working tree, index, and stash),
+`is_git_pushed()` (named branch and all local branches pushed to a valid remote),
+`git_status()` (`"not-git"`, `"dirty"`, `"no-remote"`, `"unpushed"`, `"clean-pushed"`).
 Host functions: `print(string)` (stderr), `now()` (epoch seconds, for
 age-based rules), `param_int(string, int) -> int`, `param_str(string, string) -> string`. The implicit 72-signature lmcode std catalog
 (`str_*`, `math_*`, collections, JSON, ...) is also available to rules.

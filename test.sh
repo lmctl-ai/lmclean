@@ -263,11 +263,52 @@ OUT="$(lm clean-build-dirs --param names=src "$TREE")"
 printf '%s\n' "$OUT" | grep -q '"path":"'"$TREE"'/app/src"' || fail "names=src should select app/src"
 lm clean-tmp --param bogus "$TREE" >/dev/null 2>&1 && fail "--param without = should fail" || true
 
+# --- 12. git-aware + last-access (raccessed/rmodified) rule pack ---------------
+note "clean-stale-git-repos (git state + raccessed/rmodified)"
+GITTREE="$WORK/gittree"
+mkdir -p "$GITTREE/remote.git" "$GITTREE/clean_stale"
+git -C "$GITTREE/remote.git" init --bare -b main >/dev/null 2>&1
+REMOTE_URL="file://$GITTREE/remote.git"
+
+git -C "$GITTREE/clean_stale" init -b main >/dev/null 2>&1
+git -C "$GITTREE/clean_stale" config user.name "Test"
+git -C "$GITTREE/clean_stale" config user.email "test@example.com"
+echo "tracked" > "$GITTREE/clean_stale/file.txt"
+touch_age 10 "$GITTREE/clean_stale/file.txt"
+git -C "$GITTREE/clean_stale" add file.txt
+git -C "$GITTREE/clean_stale" commit -m "initial" >/dev/null 2>&1
+git -C "$GITTREE/clean_stale" remote add origin "$REMOTE_URL"
+git -C "$GITTREE/clean_stale" push -u origin main >/dev/null 2>&1
+touch_age 10 "$GITTREE/clean_stale/file.txt"
+
+git clone -q "$REMOTE_URL" "$GITTREE/clean_fresh"
+
+git clone -q "$REMOTE_URL" "$GITTREE/dirty_stale"
+echo "uncommitted" >> "$GITTREE/dirty_stale/file.txt"
+touch_age 10 "$GITTREE/dirty_stale/file.txt"
+
+git clone -q "$REMOTE_URL" "$GITTREE/unpushed_stale"
+git -C "$GITTREE/unpushed_stale" config user.name "Test"
+git -C "$GITTREE/unpushed_stale" config user.email "test@example.com"
+echo "ahead" >> "$GITTREE/unpushed_stale/file.txt"
+git -C "$GITTREE/unpushed_stale" commit -am "local unpushed" >/dev/null 2>&1
+touch_age 10 "$GITTREE/unpushed_stale/file.txt"
+
+lm clean-stale-git-repos --max-depth 0 "$GITTREE" >"$WORK/git_out" 2>"$WORK/git_err" || fail "clean-stale-git-repos dry-run exit != 0"
+assert_json_lines < "$WORK/git_out"
+[ "$(grep -c '"plan":"delete"' "$WORK/git_out")" = 1 ] || fail "should select only clean_stale"
+grep -q '"path":"'"$GITTREE"'/clean_stale"' "$WORK/git_out" || fail "clean_stale not selected"
+grep -q 'clean_fresh' "$WORK/git_out" && fail "clean_fresh must not match (fresh)"
+grep -q 'dirty_stale' "$WORK/git_out" && fail "dirty_stale must not match (dirty)"
+grep -q 'unpushed_stale' "$WORK/git_out" && fail "unpushed_stale must not match (unpushed)"
+grep -q 'flagged unsafe git repo (dirty): '"$GITTREE"'/dirty_stale' "$WORK/git_err" || fail "dirty_stale not flagged on stderr"
+grep -q 'flagged unsafe git repo (unpushed): '"$GITTREE"'/unpushed_stale' "$WORK/git_err" || fail "unpushed_stale not flagged on stderr"
+
 else
 note "LMCLEAN_SKIP_EXAMPLES=1: skipping example compilation and dslb end-to-end sections"
 fi
 
-# --- 11. schema and signatures flags ---------------------------------------------
+# --- 13. schema and signatures flags ---------------------------------------------
 note "R42 flags"
 [ "$("$BIN" --version)" = "lmclean ${LMCLEAN_VERSION:-0.1.0}" ] || fail "--version output"
 "$BIN" --lmcode-schema | cmp - clean.dsl.json || fail "--lmcode-schema must print exact schema bytes"
@@ -276,6 +317,13 @@ note "R42 flags"
 # early (SIGPIPE) and trip pipefail.
 SIGS="$("$BIN" --lmcode-signatures)" || fail "--lmcode-signatures exit != 0"
 printf '%s\n' "$SIGS" | grep -q '^method File.modified() -> int$' || fail "--lmcode-signatures missing File.modified"
+printf '%s\n' "$SIGS" | grep -q '^method File.accessed() -> int$' || fail "--lmcode-signatures missing File.accessed"
+printf '%s\n' "$SIGS" | grep -q '^method File.raccessed() -> int$' || fail "--lmcode-signatures missing File.raccessed"
+printf '%s\n' "$SIGS" | grep -q '^method File.rmodified() -> int$' || fail "--lmcode-signatures missing File.rmodified"
+printf '%s\n' "$SIGS" | grep -q '^method File.is_git_repo() -> bool$' || fail "--lmcode-signatures missing File.is_git_repo"
+printf '%s\n' "$SIGS" | grep -q '^method File.is_git_clean() -> bool$' || fail "--lmcode-signatures missing File.is_git_clean"
+printf '%s\n' "$SIGS" | grep -q '^method File.is_git_pushed() -> bool$' || fail "--lmcode-signatures missing File.is_git_pushed"
+printf '%s\n' "$SIGS" | grep -q '^method File.git_status() -> string$' || fail "--lmcode-signatures missing File.git_status"
 printf '%s\n' "$SIGS" | grep -q '^method File.rsize() -> int$' || fail "--lmcode-signatures missing File.rsize"
 printf '%s\n' "$SIGS" | grep -q '^fn now() -> int$' || fail "--lmcode-signatures missing now"
 printf '%s\n' "$SIGS" | grep -q '^fn param_int(string, int) -> int$' || fail "--lmcode-signatures missing param_int"

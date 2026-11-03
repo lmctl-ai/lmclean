@@ -13,7 +13,14 @@
         "is_file": [{ "params": [], "returns": "bool" }],
         "is_dir": [{ "params": [], "returns": "bool" }],
         "is_symlink": [{ "params": [], "returns": "bool" }],
-        "modified": [{ "params": [], "returns": "int" }]
+        "modified": [{ "params": [], "returns": "int" }],
+        "accessed": [{ "params": [], "returns": "int" }],
+        "raccessed": [{ "params": [], "returns": "int" }],
+        "rmodified": [{ "params": [], "returns": "int" }],
+        "is_git_repo": [{ "params": [], "returns": "bool" }],
+        "is_git_clean": [{ "params": [], "returns": "bool" }],
+        "is_git_pushed": [{ "params": [], "returns": "bool" }],
+        "git_status": [{ "params": [], "returns": "string" }]
       }
     }
   },

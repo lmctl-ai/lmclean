@@ -1,0 +1,42 @@
+# lmclean rule pack: stale, clean, fully-pushed Git working trees.
+# Selects a Git repository directory only when:
+#   1. Its working tree and stash are clean (is_git_clean()),
+#   2. Its current branch and all local branches are pushed to a valid remote (is_git_pushed()),
+#   3. No file in its working tree was accessed or modified within stale_hours.
+# Dirty, unpushed, or local-only Git repositories are never selected and are
+# flagged on stderr with their git_status() reason ("dirty", "no-remote", "unpushed").
+#
+# Tunable (--param NAME=VALUE):
+#   stale_hours  hours since last access/modification inside the repo (default 168 = 7 days)
+#   ignore       comma-separated directory names to prune (default ".git,.svn,.hg,node_modules,target")
+program = _lmcode_ schema="../clean.dsl.json";
+@ignore
+fn skip_internals(f: File) -> bool implements Ignore {
+  let names = "," + param_str("ignore", ".git,.svn,.hg,node_modules,target") + ",";
+  return f.is_dir() && str_contains(names, "," + f.name() + ",");
+}
+@select
+fn stale_clean_git_repo(f: File) -> bool implements Filter {
+  let stale_secs = param_int("stale_hours", 168) * 3600;
+  let is_repo = f.is_dir() && f.is_git_repo();
+  let safe_git = is_repo && f.is_git_clean() && f.is_git_pushed();
+  if (is_repo && !safe_git) {
+    print("lmclean flagged unsafe git repo (" + f.git_status() + "): " + f.path());
+  }
+  let stale = safe_git
+    && (now() - f.raccessed() > stale_secs)
+    && (now() - f.rmodified() > stale_secs);
+  return stale;
+}
+@report
+fn audit(f: File) -> void implements Report {
+  print("lmclean matched stale clean-pushed git repo " + f.path()
+    + " (" + str(f.rsize()) + " bytes)");
+}
+end _lmcode_
+
+host_args = [ARGV[0], "--lmcode", "$DSLFILE"];
+for (i in range(1, len(ARGV))) { host_args = concat(host_args, [ARGV[i]]); }
+r = run_lmcode(program, {command: host_args});
+assert(r.ok, "lmclean failed: " + json_stringify(r));
+print(json_stringify(r.result));
