@@ -175,6 +175,7 @@ printf '%s\n' "$OUT" | grep -q '"path":"'"$TREE"'/.dotfile.tmp"' || fail "--hidd
 # --- 6. directory rules (clean-build-dirs) ------------------------------------
 note "directory matching"
 TREE="$WORK/tree6"; build_tree "$TREE"
+chmod 555 "$TREE/app/node_modules/pkg"
 OUT="$(lm clean-build-dirs "$TREE")" || fail "dir dry-run exit != 0"
 printf '%s\n' "$OUT" | assert_json_lines
 [ "$(printf '%s\n' "$OUT" | grep -c '"plan":"delete"')" = 1 ] || fail "should match exactly node_modules"

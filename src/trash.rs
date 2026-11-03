@@ -69,11 +69,7 @@ fn move_path(from: &Path, to: &Path) -> io::Result<()> {
         Ok(()) => Ok(()),
         Err(e) if e.raw_os_error() == Some(EXDEV) => {
             copy_tree(from, to)?;
-            if is_real_dir(from)? {
-                fs::remove_dir_all(from)
-            } else {
-                fs::remove_file(from)
-            }
+            crate::walk::remove_entry(from, is_real_dir(from)?)
         }
         Err(e) => Err(e),
     }

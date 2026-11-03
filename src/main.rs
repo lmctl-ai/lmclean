@@ -179,11 +179,7 @@ impl Sweep {
                 }
             }
         } else {
-            let removal = if cand.metadata.is_dir() {
-                std::fs::remove_dir_all(&cand.path)
-            } else {
-                std::fs::remove_file(&cand.path)
-            };
+            let removal = walk::remove_entry(&cand.path, cand.metadata.is_dir());
             match removal {
                 Ok(()) => {
                     line.extend_from_slice(b"{\"deleted\":\"unlink\",\"path\":");

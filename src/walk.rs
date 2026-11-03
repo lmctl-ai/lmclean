@@ -77,6 +77,70 @@ pub fn rsize(path: &Path) -> i64 {
     total
 }
 
+/// Removes a file, symlink, or directory tree. If standard removal fails with
+/// `PermissionDenied` (for example, Go `GOMODCACHE` `0555` module directories
+/// on Unix or read-only build artifacts on Windows), makes user-owned entries
+/// inside `path` writable without following symlinks and retries once.
+pub fn remove_entry(path: &Path, is_dir: bool) -> std::io::Result<()> {
+    let attempt = || {
+        if is_dir {
+            fs::remove_dir_all(path)
+        } else {
+            fs::remove_file(path)
+        }
+    };
+    match attempt() {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            make_writable_tree(path);
+            attempt()
+        }
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(unix)]
+fn make_dir_writable(dir: &Path, meta: &fs::Metadata) {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = meta.permissions().mode();
+    if mode & 0o700 != 0o700 {
+        let _ = fs::set_permissions(dir, fs::Permissions::from_mode(mode | 0o700));
+    }
+}
+
+#[cfg(not(unix))]
+fn make_dir_writable(dir: &Path, meta: &fs::Metadata) {
+    let mut perms = meta.permissions();
+    if perms.readonly() {
+        perms.set_readonly(false);
+        let _ = fs::set_permissions(dir, perms);
+    }
+}
+
+fn make_writable_tree(path: &Path) {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+    if meta.file_type().is_symlink() {
+        return;
+    }
+    if meta.is_dir() {
+        make_dir_writable(path, &meta);
+        if let Ok(entries) = fs::read_dir(path) {
+            for entry in entries.flatten() {
+                make_writable_tree(&entry.path());
+            }
+        }
+    } else {
+        let mut perms = meta.permissions();
+        if perms.readonly() {
+            perms.set_readonly(false);
+            let _ = fs::set_permissions(path, perms);
+        }
+    }
+}
+
 /// Visits every candidate under `root` (or `root` itself when it is not a
 /// directory, at depth 0). A directory's direct children have depth 0. The
 /// callback's return value decides descent into a directory: `false` skips it
@@ -342,6 +406,40 @@ mod tests {
         fs::set_permissions(dir.join("secret"), fs::Permissions::from_mode(0o000)).unwrap();
         assert_eq!(rsize(&dir), 7);
         fs::set_permissions(dir.join("secret"), fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_entry_cleans_readonly_subdirs_without_following_symlinks() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("remove-readonly");
+        let outside = dir.join("outside");
+        fs::create_dir(&outside).unwrap();
+        let keep = outside.join("keep.txt");
+        fs::write(&keep, b"survive").unwrap();
+        fs::set_permissions(&keep, fs::Permissions::from_mode(0o444)).unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let gomod = dir.join("gomodcache");
+        let mod_dir = gomod.join("example.com").join("pkg@v1.0.0");
+        fs::create_dir_all(&mod_dir).unwrap();
+        let mod_file = mod_dir.join("lib.go");
+        fs::write(&mod_file, b"package pkg").unwrap();
+        std::os::unix::fs::symlink(&outside, mod_dir.join("ext-link")).unwrap();
+        fs::set_permissions(&mod_file, fs::Permissions::from_mode(0o444)).unwrap();
+        fs::set_permissions(&mod_dir, fs::Permissions::from_mode(0o555)).unwrap();
+
+        remove_entry(&gomod, true).unwrap();
+        assert!(!gomod.exists());
+        assert!(keep.exists(), "symlink target must not be removed or mutated");
+        assert_eq!(
+            fs::symlink_metadata(&outside).unwrap().permissions().mode() & 0o777,
+            0o555
+        );
+
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&keep, fs::Permissions::from_mode(0o644)).unwrap();
         let _ = fs::remove_dir_all(&dir);
     }
 }

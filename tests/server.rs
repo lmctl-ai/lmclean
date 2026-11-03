@@ -27,6 +27,7 @@ struct Server {
     child: Child,
     addr: String,
     token: Option<String>,
+    port_file: PathBuf,
 }
 
 fn spawn_server(mut cmd: Command, serve_args: &[&str]) -> Server {
@@ -59,7 +60,7 @@ fn spawn_server(mut cmd: Command, serve_args: &[&str]) -> Server {
         std::thread::sleep(Duration::from_millis(25));
     };
     let token = serve_args.iter().position(|a| *a == "--token").map(|i| serve_args[i + 1].to_string());
-    Server { child, addr, token }
+    Server { child, addr, token, port_file }
 }
 
 impl Server {
@@ -129,12 +130,14 @@ impl Drop for Server {
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(5) {
             if self.child.try_wait().ok().flatten().is_some() {
+                let _ = std::fs::remove_file(&self.port_file);
                 return;
             }
             std::thread::sleep(Duration::from_millis(25));
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+        let _ = std::fs::remove_file(&self.port_file);
     }
 }
 
@@ -171,14 +174,29 @@ fn matched_paths(doc: &Json) -> Vec<String> {
         .collect()
 }
 
-fn scratch(name: &str) -> PathBuf {
+struct Scratch(PathBuf);
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch(name: &str) -> Scratch {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("target")
         .join("server-test")
         .join(format!("{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    Scratch(dir)
 }
 
 fn write(path: &Path, content: &str) {
@@ -431,7 +449,8 @@ fn use_tree(s: &Server, tree: &Path, extra: &str) {
 #[test]
 fn example_clean_tmp_scan_cache_and_clean() {
     need_lmscript!();
-    let tree = scratch("tmp").join("tree");
+    let dir = scratch("tmp");
+    let tree = dir.join("tree");
     build_tree(&tree);
     let s = Server::example("clean-tmp", &["--allow-exec"]);
     use_tree(&s, &tree, "");
@@ -475,7 +494,8 @@ fn example_clean_tmp_scan_cache_and_clean() {
 #[test]
 fn example_views_filter_sort_page_and_summarize() {
     need_lmscript!();
-    let tree = scratch("views").join("tree");
+    let dir = scratch("views");
+    let tree = dir.join("tree");
     build_tree(&tree);
     let s = Server::example("clean-tmp", &[]);
     use_tree(&s, &tree, "");
@@ -527,7 +547,8 @@ fn example_views_filter_sort_page_and_summarize() {
 #[test]
 fn example_clean_selection_dry_run_and_expect_guard() {
     need_lmscript!();
-    let tree = scratch("select").join("tree");
+    let dir = scratch("select");
+    let tree = dir.join("tree");
     build_tree(&tree);
     let s = Server::example("clean-tmp", &["--allow-exec"]);
     use_tree(&s, &tree, "");
@@ -572,7 +593,8 @@ fn example_clean_selection_dry_run_and_expect_guard() {
 #[test]
 fn example_dry_run_clean_works_without_allow_exec() {
     need_lmscript!();
-    let tree = scratch("noexec").join("tree");
+    let dir = scratch("noexec");
+    let tree = dir.join("tree");
     build_tree(&tree);
     let s = Server::example("clean-tmp", &[]);
     use_tree(&s, &tree, "");
@@ -587,7 +609,8 @@ fn example_dry_run_clean_works_without_allow_exec() {
 #[test]
 fn example_params_tune_the_rule_itself() {
     need_lmscript!();
-    let tree = scratch("params").join("tree");
+    let dir = scratch("params");
+    let tree = dir.join("tree");
     build_tree(&tree);
     let s = Server::example("clean-tmp", &[]);
     use_tree(&s, &tree, "");
@@ -642,7 +665,8 @@ fn example_clean_tmp_trash_then_restore() {
 #[test]
 fn example_clean_tmp_hidden_toggle() {
     need_lmscript!();
-    let tree = scratch("tmp-hidden").join("tree");
+    let dir = scratch("tmp-hidden");
+    let tree = dir.join("tree");
     build_tree(&tree);
     let s = Server::example("clean-tmp", &[]);
     use_tree(&s, &tree, "");
@@ -656,7 +680,8 @@ fn example_clean_tmp_hidden_toggle() {
 #[test]
 fn example_clean_build_dirs() {
     need_lmscript!();
-    let tree = scratch("dirs").join("tree");
+    let dir = scratch("dirs");
+    let tree = dir.join("tree");
     build_tree(&tree);
     let s = Server::example("clean-build-dirs", &["--allow-exec"]);
     use_tree(&s, &tree, "");
@@ -681,7 +706,8 @@ fn example_clean_build_dirs() {
 #[test]
 fn example_clean_ignore_prunes_vcs() {
     need_lmscript!();
-    let tree = scratch("ignore").join("tree");
+    let dir = scratch("ignore");
+    let tree = dir.join("tree");
     write(&tree.join(".git/hooks/x.tmp"), "vcs\n");
     age(&tree.join(".git/hooks/x.tmp"), 10);
     write(&tree.join("old.tmp"), "top\n");
@@ -705,7 +731,8 @@ fn example_clean_ignore_prunes_vcs() {
 #[cfg_attr(not(unix), ignore = "directory mtimes cannot be set through std on Windows")]
 fn example_clean_stale_build_dirs() {
     need_lmscript!();
-    let tree = scratch("stale").join("tree");
+    let dir = scratch("stale");
+    let tree = dir.join("tree");
     std::fs::create_dir_all(tree.join("oldproj/target")).unwrap();
     std::fs::create_dir_all(tree.join("fresh/dist")).unwrap();
     std::fs::create_dir_all(tree.join("src/build")).unwrap();

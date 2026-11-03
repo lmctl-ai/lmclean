@@ -652,8 +652,7 @@ impl State {
             };
             let result = match sink.as_mut() {
                 Some(t) => t.store(&m.path, &m.root).map(|_| ()),
-                None if meta.is_dir() => std::fs::remove_dir_all(&m.path),
-                None => std::fs::remove_file(&m.path),
+                None => walk::remove_entry(&m.path, meta.is_dir()),
             };
             match result {
                 Ok(()) => {
