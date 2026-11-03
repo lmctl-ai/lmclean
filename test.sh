@@ -50,7 +50,7 @@ HOST_BIN="$(pwd -W 2>/dev/null || pwd)/$BIN"
 # forward-slash paths. stderr is untouched. pipefail keeps lmscript's status.
 lm() {
   local ex="$1"; shift
-  "$LMSCRIPT_BIN" --no-preflight "examples/$ex.lms" "$HOST_BIN" "$@" | tr -d '\r' | sed 's#\\\\#/#g'
+  "$LMSCRIPT_BIN" "examples/$ex.lms" "$HOST_BIN" "$@" | tr -d '\r' | sed 's#\\\\#/#g'
 }
 note "examples compile and run with $LMSCRIPT_BIN"
 lm clean-tmp "$(mktemp -d)" >/dev/null || fail "clean-tmp example does not run"
@@ -225,7 +225,7 @@ end _lmcode_
 r = run_lmcode(program, {command: [ARGV[0], "--lmcode", "$DSLFILE", ARGV[1]]});
 assert(!r.ok && r.phase == "app" && r.code == "APP_FAIL", "wrong @ignore interface must be an application failure: " + json_stringify(r));
 LMS
-"$LMSCRIPT_BIN" --no-preflight target/bad-ignore.lms "$HOST_BIN" "$TREE" >/dev/null 2>&1 \
+"$LMSCRIPT_BIN" target/bad-ignore.lms "$HOST_BIN" "$TREE" >/dev/null 2>&1 \
   || fail "wrong @ignore interface must fail with phase app (exit 4 in the host)"
 
 # --- 9. stderr is separate; print() does not pollute stdout --------------------

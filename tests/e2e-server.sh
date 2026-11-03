@@ -94,7 +94,7 @@ EOF
 
 # --- 2. launch --------------------------------------------------------------------
 note "launch lmclean (all four example programs behind one server)"
-"$LMSCRIPT_BIN" --no-preflight examples/serve-all.lms "$HOST_BIN" --serve \
+"$LMSCRIPT_BIN" examples/serve-all.lms "$HOST_BIN" --serve \
   --presets "$WORK/presets.json" --allow-exec --idle-timeout 120 --port-file "$WORK/port" \
   > "$WORK/server.out" 2> "$WORK/server.err" &
 SERVER_PID=$!
@@ -190,7 +190,7 @@ grep -q 'shutdown' "$WORK/server.out" || fail "no shutdown result in server outp
 # --- 6. idle timeout exits by itself ---------------------------------------------------------
 note "idle timeout: no requests, server exits on its own"
 rm -f "$WORK/port"
-"$LMSCRIPT_BIN" --no-preflight examples/clean-tmp.lms "$HOST_BIN" --serve \
+"$LMSCRIPT_BIN" examples/clean-tmp.lms "$HOST_BIN" --serve \
   --idle-timeout 2 --port-file "$WORK/port" \
   > "$WORK/idle.out" 2> "$WORK/idle.err" &
 SERVER_PID=$!

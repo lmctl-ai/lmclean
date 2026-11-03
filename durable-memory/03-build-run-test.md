@@ -27,7 +27,7 @@ cargo is not on PATH: `source ~/.cargo/env` first (or call
 There is no standalone `.dslb` export any more (`savedsl` was removed from the
 compiler). Each `examples/*.lms` is a *driver*: after the `_lmcode_` block it
 calls `run_lmcode(program, {command: [ARGV[0], "--lmcode", "$DSLFILE", ...]})`,
-so `lmscript --no-preflight examples/NAME.lms HOST [HOST ARGS]` compiles and
+so `lmscript examples/NAME.lms HOST [HOST ARGS]` compiles and
 runs in one step. Install the compiler with `npm install @lmctl-ai/lmctl`
 (0.2.450 is what CI and these notes were verified with; set `LMSCRIPT_BIN`).
 

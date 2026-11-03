@@ -75,7 +75,7 @@ impl Server {
         let lmscript = lmscript_bin().expect("checked by caller");
         let mut cmd = Command::new(lmscript);
         cmd.current_dir(env!("CARGO_MANIFEST_DIR"))
-            .args(["--no-preflight", &format!("examples/{script}.lms"), HOST, "--serve"]);
+            .args([&format!("examples/{script}.lms"), HOST, "--serve"]);
         let mut all = vec!["--idle-timeout", "120"];
         all.extend_from_slice(args);
         spawn_server(cmd, &all)
@@ -738,7 +738,7 @@ fn example_presets_switch_between_all_rule_packs() {
     let file = base.join("presets.json");
     let lmscript = lmscript_bin().unwrap();
     let mut cmd = Command::new(lmscript);
-    cmd.current_dir(env!("CARGO_MANIFEST_DIR")).args(["--no-preflight", "examples/serve-all.lms", HOST, "--serve"]);
+    cmd.current_dir(env!("CARGO_MANIFEST_DIR")).args(["examples/serve-all.lms", HOST, "--serve"]);
     let s = spawn_server(cmd, &["--idle-timeout", "120", "--presets", file.to_str().unwrap()]);
 
     let (_, list) = s.req("GET", "/presets", "");
