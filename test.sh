@@ -295,6 +295,9 @@ git -C "$GITTREE/unpushed_stale" commit -am "local unpushed" >/dev/null 2>&1
 touch_age 10 "$GITTREE/unpushed_stale/file.txt"
 
 lm clean-stale-git-repos --max-depth 0 "$GITTREE" >"$WORK/git_out" 2>"$WORK/git_err" || fail "clean-stale-git-repos dry-run exit != 0"
+# lm() normalizes stdout only; print() lines on stderr carry raw native paths
+# (Windows joins children with "\"), so normalize them the same way.
+tr -d '\r' < "$WORK/git_err" | sed 's#\\#/#g' > "$WORK/git_err.norm" && mv "$WORK/git_err.norm" "$WORK/git_err"
 assert_json_lines < "$WORK/git_out"
 [ "$(grep -c '"plan":"delete"' "$WORK/git_out")" = 1 ] || fail "should select only clean_stale"
 grep -q '"path":"'"$GITTREE"'/clean_stale"' "$WORK/git_out" || fail "clean_stale not selected"
