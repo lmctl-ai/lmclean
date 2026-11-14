@@ -219,6 +219,12 @@ The `regen-dirs` preset (slot 4 of `examples/serve-all.lms`) is the working-tree
 `by_root`, drop trees you still use with `exclude`, then `POST /clean` with
 `expect_matched`/`expect_bytes`.
 
+**Trash does not grow (script mode).** `examples/clean-regen-dirs.lms --exec --trash DIR ...` first
+deletes the previous contents of `DIR` (one generation of trash: only the last run can be
+restored), and refuses any `DIR` whose path does not contain `lmclean-trash`. `--restore` never
+purges. In server mode (`POST /clean` with `trash`) lmclean itself never purges: empty the
+trash dir yourself before the next clean (or use the script mode).
+
 ### Tuning the filter, three layers
 
 1. **Rule parameters** (`params`): change what the compiled rule selects

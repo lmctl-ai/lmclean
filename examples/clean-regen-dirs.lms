@@ -7,6 +7,8 @@
 # Self-installing: the host is fetched from the GitHub release on first run (cli/install
 # on the _lmcode_ line), so there is no build step and no host path argument.
 # Tunables (--param NAME=VALUE): stale_hours (default 3), names (default "node_modules,target,dist,.cache").
+#   lmscript examples/clean-regen-dirs.lms --exec --trash /tmp/lmclean-trash --hidden --max-depth 2 ROOT ...
+#     (previous /tmp/lmclean-trash is purged first; --restore brings the last run back)
 # Leave a working tree out by not listing it as a ROOT (a directory modified inside
 # stale_hours is never selected, but reading a tree does not touch its mtime).
 program = _lmcode_ cli="lmclean" install="github:lmctl-ai/lmclean@latest";
@@ -27,6 +29,26 @@ fn audit(f: File) -> void implements Report {
 }
 end _lmcode_
 
+# One generation of trash: before a real run that moves into a trash dir
+# (--exec --trash DIR), the previous contents of DIR are deleted for good, so the
+# trash never grows past the last run. After that run, only that run can be restored.
+# Safety: DIR must be an existing directory whose path contains "lmclean-trash"
+# (anything else is refused). --restore never purges.
+let exec_run = false;
+let restore_run = false;
+let trash_dir = "";
+for (i in range(0, len(ARGV))) {
+  if (ARGV[i] == "--exec") { exec_run = true; }
+  if (ARGV[i] == "--restore") { restore_run = true; }
+  if (ARGV[i] == "--trash" && i + 1 < len(ARGV)) { trash_dir = ARGV[i + 1]; }
+}
+if (exec_run && !restore_run && trash_dir != "") {
+  assert(contains(trash_dir, "lmclean-trash"), "refusing to purge a trash dir not named lmclean-trash: " + trash_dir);
+  if (file_exists(trash_dir)) {
+    print("lmclean: purging previous trash " + trash_dir);
+    rmdir(trash_dir, true);
+  }
+}
 r = run_lmcode(program, {args: ARGV});
 assert(r.ok, "lmclean failed: " + json_stringify(r));
 print(json_stringify(r.result));
