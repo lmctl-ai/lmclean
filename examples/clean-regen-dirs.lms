@@ -1,0 +1,32 @@
+# lmclean rule pack: regenerable dependency/build directories whose whole subtree
+# has not been modified for stale_hours. Meant for a folder of many working trees
+# (git worktrees, checkouts): node_modules, dist, target, .cache can be rebuilt,
+# the tracked sources are left alone. Dry-run by default.
+#   lmscript examples/clean-regen-dirs.lms --hidden --max-depth 2 ROOT [ROOT ...]
+#   lmscript examples/clean-regen-dirs.lms --exec --hidden --max-depth 2 ROOT ...
+# Self-installing: the host is fetched from the GitHub release on first run (cli/install
+# on the _lmcode_ line), so there is no build step and no host path argument.
+# Tunables (--param NAME=VALUE): stale_hours (default 3), names (default "node_modules,target,dist,.cache").
+# Leave a working tree out by not listing it as a ROOT (a directory modified inside
+# stale_hours is never selected, but reading a tree does not touch its mtime).
+program = _lmcode_ cli="lmclean" install="github:lmctl-ai/lmclean@latest";
+@ignore
+fn skip_git(f: File) -> bool implements Ignore {
+  return f.is_dir() && f.name() == ".git";
+}
+@select
+fn regen_dir(f: File) -> bool implements Filter {
+  let names = "," + param_str("names", "node_modules,target,dist,.cache") + ",";
+  return f.is_dir()
+    && str_contains(names, "," + f.name() + ",")
+    && now() - f.rmodified() > param_int("stale_hours", 3) * 3600;
+}
+@report
+fn audit(f: File) -> void implements Report {
+  print("lmclean regen " + f.path() + " (" + str(f.rsize() / 1048576) + " MiB)");
+}
+end _lmcode_
+
+r = run_lmcode(program, {args: ARGV});
+assert(r.ok, "lmclean failed: " + json_stringify(r));
+print(json_stringify(r.result));

@@ -88,6 +88,15 @@ to `du`/`df` or any external tool:
   which counts each inode once).
 - Unreadable subtrees are skipped (best effort, no abort).
 
+### No build needed
+
+`lmscript examples/clean-regen-dirs.lms [OPTIONS] ROOT ...` declares
+`cli="lmclean" install="github:lmctl-ai/lmclean@latest"`, so lmscript downloads the
+release host on first use and runs it (dry-run by default; no `cargo build`, no host
+path argument). It selects regenerable directories (`node_modules`, `dist`, `target`,
+`.cache`) whose subtree has not changed for `stale_hours`, for folders of many
+working trees.
+
 ## Authoring rules
 
 A rule file is an lmscript source with one `_lmcode_` block against
