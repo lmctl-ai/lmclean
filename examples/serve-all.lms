@@ -1,5 +1,5 @@
 # lmclean server with every rule pack loaded: a builder hands the host one
-# --lmcode slot per program, in add order (slot 0..3). The presets file maps
+# --lmcode slot per program, in add order (slot 0..4). The presets file maps
 # names to slots (see serve-presets.json).
 #   lmscript examples/serve-all.lms target/release/lmclean --serve \
 #       --presets examples/serve-presets.json [--allow-exec] [--idle-timeout S]
@@ -57,11 +57,28 @@ fn audit(f: File) -> void implements Report {
     + " (" + str(f.rsize() / 1048576) + " MiB reclaimable)");
 }
 end _lmcode_
+regen = _lmcode_ s;
+@ignore
+fn skip_git(f: File) -> bool implements Ignore {
+  return f.is_dir() && f.name() == ".git";
+}
+@select
+fn regen_dir(f: File) -> bool implements Filter {
+  let names = "," + param_str("names", "node_modules,target,dist,.cache") + ",";
+  return f.is_dir()
+    && str_contains(names, "," + f.name() + ",")
+    && now() - f.rmodified() > param_int("stale_hours", 3) * 3600;
+}
+@report
+fn audit(f: File) -> void implements Report {
+  print("lmclean regen " + f.path() + " (" + str(f.rsize() / 1048576) + " MiB)");
+}
+end _lmcode_
 
 host_prefix = [ARGV[0]];
 for (i in range(1, len(ARGV))) { host_prefix = concat(host_prefix, [ARGV[i]]); }
 b = lmcode_build(host_prefix);
-for (p in [tmp, dirs, ign, stale]) { b.add(p, ["--lmcode", "$DSLFILE"]); }
+for (p in [tmp, dirs, ign, stale, regen]) { b.add(p, ["--lmcode", "$DSLFILE"]); }
 r = run_lmcode(b);
 assert(r.ok, "lmclean failed: " + json_stringify(r));
 print(json_stringify(r.result));

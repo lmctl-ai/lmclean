@@ -212,6 +212,13 @@ usage, `3` a program fails to load, `4` bad presets file / unreadable input.
 | `POST /restore` | replay the trash manifest (`settings.trash` or `{"trash":"DIR"}`); needs `--allow-exec` |
 | `POST /shutdown` | reply, then exit |
 
+The `regen-dirs` preset (slot 4 of `examples/serve-all.lms`) is the working-tree cleaner:
+`node_modules`, `target`, `dist`, `.cache` whose whole subtree is untouched for `stale_hours`
+(default 3), `hidden` on, `max_depth` 2. Point it at your trees with
+`PUT /settings {"paths":[...]}`, look at `POST /scan?view=summary` and
+`by_root`, drop trees you still use with `exclude`, then `POST /clean` with
+`expect_matched`/`expect_bytes`.
+
 ### Tuning the filter, three layers
 
 1. **Rule parameters** (`params`): change what the compiled rule selects

@@ -4,6 +4,7 @@
     "tmp":        { "program": 0, "paths": ["/var/tmp"], "params": { "stale_days": 7, "exts": "tmp,log" } },
     "build-dirs": { "program": 1, "paths": ["."] },
     "vcs-safe":   { "program": 2, "paths": ["."], "hidden": true, "params": { "stale_days": 3 } },
-    "stale-dirs": { "program": 3, "paths": ["."], "trash": "/tmp/lmclean-trash", "params": { "stale_hours": 48 } }
+    "stale-dirs": { "program": 3, "paths": ["."], "trash": "/tmp/lmclean-trash", "params": { "stale_hours": 48 } },
+    "regen-dirs": { "program": 4, "paths": ["."], "hidden": true, "max_depth": 2, "params": { "stale_hours": 3, "names": "node_modules,target,dist,.cache" } }
   }
 }
