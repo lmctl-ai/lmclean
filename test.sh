@@ -307,6 +307,38 @@ grep -q 'unpushed_stale' "$WORK/git_out" && fail "unpushed_stale must not match 
 grep -q 'flagged unsafe git repo (dirty): '"$GITTREE"'/dirty_stale' "$WORK/git_err" || fail "dirty_stale not flagged on stderr"
 grep -q 'flagged unsafe git repo (unpushed): '"$GITTREE"'/unpushed_stale' "$WORK/git_err" || fail "unpushed_stale not flagged on stderr"
 
+# --- 12b. std REST endpoints and stateless CLI interfaces ----------------------
+note "std REST endpoints and stateless CLI (RestGet, CliCommand, CliOption, rest_cli)"
+SCHEMA_PATH="$(pwd -W 2>/dev/null || pwd)/clean.dsl.json"
+cat > "$WORK/rest-cli.lms" <<LMS
+program = _lmcode_ schema="$SCHEMA_PATH";
+@"--exts"
+fn opt_exts(x: RestExchange) -> void implements CliOption {
+  x.set("exts", x.query("exts"));
+}
+
+@"policy"
+fn cmd_policy(x: RestExchange) -> void implements CliCommand {
+  let days = param_int("stale_days", 7);
+  x.send("policy:exts=" + x.get("exts") + ":days=" + str(days));
+}
+
+@"/policy/:profile"
+fn get_policy(x: RestExchange) -> void implements RestGet {
+  x.json("{\"profile\":\"" + x.param("profile") + "\",\"exts\":\"" + x.get("exts") + "\"}");
+}
+
+rest_config("session", "global");
+print(rest_cli(str_split("--exts=tmp,log policy", " ")));
+print(rest_cli(str_split("--exts=tmp,log /policy/default", " ")));
+end _lmcode_
+r = run_lmcode(program, {command: [ARGV[0], "--lmcode", "\$DSLFILE", "--param", "stale_days=14"]});
+assert(r.ok, "std rest/cli program failed: " + json_stringify(r));
+LMS
+"$LMSCRIPT_BIN" "$WORK/rest-cli.lms" "$HOST_BIN" >"$WORK/rest_cli_out" 2>"$WORK/rest_cli_err" || fail "std rest/cli program exit != 0"
+grep -q 'policy:exts=tmp,log:days=14' "$WORK/rest_cli_err" || fail "std CliCommand output missing on stderr"
+grep -q '{"profile":"default","exts":"tmp,log"}' "$WORK/rest_cli_err" || fail "std RestGet output missing on stderr"
+
 else
 note "LMCLEAN_SKIP_EXAMPLES=1: skipping example compilation and dslb end-to-end sections"
 fi

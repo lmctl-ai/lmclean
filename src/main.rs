@@ -342,16 +342,23 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         hidden: cli.hidden,
         max_depth: cli.max_depth,
     };
-    for root in &roots {
-        let root_path = PathBuf::from(root);
-        let result = walk::walk(&root_path, &opts, &mut |cand| {
-            let obj = host.context.insert("File", file_of(cand));
-            let outcome = sweep.visit(&program, &mut host, &cli, cand, obj, &root_path);
-            let _ = host.context.take::<host::File>(obj);
-            outcome
-        });
-        if let Err(error) = result {
-            return Ok(frame::error("run", &error));
+    let has_walk_rules = !(sweep.ignores.is_empty() && sweep.selects.is_empty() && sweep.reports.is_empty());
+    let has_rest_or_cli_entries = program
+        .entries()
+        .iter()
+        .any(|e| e.iface.contains("Rest") || e.iface.contains("Cli"));
+    if has_walk_rules || !has_rest_or_cli_entries {
+        for root in &roots {
+            let root_path = PathBuf::from(root);
+            let result = walk::walk(&root_path, &opts, &mut |cand| {
+                let obj = host.context.insert("File", file_of(cand));
+                let outcome = sweep.visit(&program, &mut host, &cli, cand, obj, &root_path);
+                let _ = host.context.take::<host::File>(obj);
+                outcome
+            });
+            if let Err(error) = result {
+                return Ok(frame::error("run", &error));
+            }
         }
     }
     if sweep.failed > 0 {

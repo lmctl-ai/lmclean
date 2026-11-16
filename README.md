@@ -288,6 +288,35 @@ Tests: `cargo test --test server` (protocol tests need nothing; the example
 tests drive every `examples/*.lms` through `lmscript` and need `LMSCRIPT_BIN`
 or `lmscript` on PATH, `LMCLEAN_REQUIRE_EXAMPLES=1` makes them mandatory).
 
+## Standard `lmcode` REST & Stateless CLI Interfaces
+
+`lmclean` includes the `lmcode` standard REST router and stateless CLI interfaces (`RestGet`, `RestPost`, `RestHandler`, `CliCommand`, `CliOption`, `rest_config`, `rest_serve`, `rest_cli`):
+
+```lms
+s = load_schema(cli=ARGV[0]);
+program = _lmcode_ s;
+@"--exts"
+fn opt_exts(x: RestExchange) -> void implements CliOption {
+  x.set("exts", x.query("exts"));
+}
+
+@"policy"
+fn cmd_policy(x: RestExchange) -> void implements CliCommand {
+  let days = param_int("stale_days", 7);
+  x.send("policy:exts=" + x.get("exts") + ":days=" + str(days));
+}
+
+@"/policy/:profile"
+fn get_policy(x: RestExchange) -> void implements RestGet {
+  x.json("{\"profile\":\"" + x.param("profile") + "\",\"exts\":\"" + x.get("exts") + "\"}");
+}
+
+rest_config("session", "global");
+print(rest_cli(str_split("--exts=tmp,log policy", " ")));
+print(rest_cli(str_split("--exts=tmp,log /policy/default", " ")));
+end _lmcode_
+```
+
 ## Layout
 
 - `src/main.rs` — CLI, R42 flags, load/run/dispatch, exit protocol
