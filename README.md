@@ -1,5 +1,7 @@
 # lmclean
 
+Documentation: [Quick reference](https://www.lmctl.com/tools/lmclean/) · [LLM skill](https://www.lmctl.com/tools/lmclean/skill.html) · [Guide](https://www.lmctl.com/tools/lmclean/guide.html) · [Reference](https://www.lmctl.com/tools/lmclean/reference.html)
+
 Scriptable file search & cleanup in the lmcode ecosystem. Rules are lmcode
 programs (`.lms` with a `_lmcode_` block) that lmscript compiles into verified
 bytecode v6 and hands to lmclean through `run_lmcode`; lmclean is the native
